@@ -1,0 +1,10 @@
+[profile.release]
+lto = "thin"
+
+[workspace]
+resolver = "2"
+
+members = [
+    "capybara",
+    "capybara-core",
+]
