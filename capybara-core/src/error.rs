@@ -11,7 +11,7 @@ pub enum Error {
     Unknown,
 
     #[error("invalid configuration '{0}'")]
-    InvalidConfig(&'static str),
+    InvalidConfig(Cow<'static, str>),
 
     #[error("invalid route")]
     InvalidRoute,

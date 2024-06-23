@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use crate::Result;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,4 +25,9 @@ pub trait Pipeline: 'static + Send + Sync {
 
 pub trait Listener: Send + Sync + 'static {
     async fn listen(&self, signal: &mut SignalReceiver) -> Result<()>;
+}
+
+#[async_trait]
+pub trait Configurable<T>: Send + Sync + 'static {
+    async fn configure(&self, c: T) -> Result<()>;
 }

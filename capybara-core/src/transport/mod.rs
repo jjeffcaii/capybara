@@ -1,3 +1,3 @@
 pub use tcp::TcpListenerBuilder;
 
-mod tcp;
+pub(crate) mod tcp;

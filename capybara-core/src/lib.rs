@@ -19,6 +19,7 @@ extern crate cfg_if;
 extern crate log;
 extern crate string_cache;
 
+pub use builtin::setup;
 pub use error::Error;
 
 /// cached string
@@ -26,6 +27,7 @@ pub mod cachestr {
     include!(concat!(env!("OUT_DIR"), "/cachestr.rs"));
 }
 
+mod builtin;
 mod error;
 mod pipeline;
 mod proto;
