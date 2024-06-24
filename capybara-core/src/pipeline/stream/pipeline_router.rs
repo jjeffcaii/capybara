@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::CapybaraError;
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -47,6 +47,6 @@ impl TryFrom<&PipelineConf> for RouteStreamPipelineFactory {
             }
         }
 
-        bail!(Error::InvalidConfig("upstream".into()))
+        bail!(CapybaraError::InvalidConfig("upstream".into()))
     }
 }

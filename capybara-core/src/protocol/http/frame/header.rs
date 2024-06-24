@@ -5,7 +5,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use small_map::SmallMap;
 use smallvec::SmallVec;
 
-use crate::error::Error::{ExceedMaxHttpHeaderSize, MalformedHttpPacket};
+use crate::error::CapybaraError::{ExceedMaxHttpHeaderSize, MalformedHttpPacket};
 use crate::protocol::http::httpfield::HttpField;
 use crate::protocol::http::misc;
 use crate::Result;

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 pub use http::{
     register as register_http_pipeline, HttpContext, HttpPipeline, HttpPipelineFactory,
@@ -12,4 +12,4 @@ pub(crate) mod http;
 mod misc;
 pub(crate) mod stream;
 
-pub type PipelineConf = BTreeMap<String, serde_yaml::Value>;
+pub type PipelineConf = HashMap<String, serde_yaml::Value>;

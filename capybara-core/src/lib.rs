@@ -20,7 +20,9 @@ extern crate log;
 extern crate string_cache;
 
 pub use builtin::setup;
-pub use error::Error;
+pub use error::CapybaraError;
+
+pub type Result<T> = std::result::Result<T, CapybaraError>;
 
 /// cached string
 pub mod cachestr {
@@ -29,10 +31,8 @@ pub mod cachestr {
 
 mod builtin;
 mod error;
-mod pipeline;
-mod proto;
-mod protocol;
-mod resolver;
-mod transport;
-
-pub type Result<T> = std::result::Result<T, Error>;
+pub mod pipeline;
+pub mod proto;
+pub mod protocol;
+pub mod resolver;
+pub mod transport;

@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 
 pub use dns::StandardDNSResolver;
 
-use crate::error::Error::NoAddressResolved;
+use crate::error::CapybaraError::NoAddressResolved;
 use crate::Result;
 
 mod dns;

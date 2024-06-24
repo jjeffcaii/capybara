@@ -10,6 +10,7 @@ string_cache_codegen = "0.5"
 [dev-dependencies]
 pretty_env_logger = "0.5.0"
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
+jemallocator = "0.5"
 
 [dependencies]
 log = "0.4"
@@ -68,3 +69,8 @@ hickory-resolver = "0.24"
 rustc-hash = { version = "2.0", default-features = false }
 moka = { version = "0.12", features = ["future", "sync"] }
 serde_yaml = "0.9"
+
+
+[[example]]
+name = "httpbin"
+path = "examples/httpbin.rs"

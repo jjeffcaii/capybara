@@ -1,3 +1,5 @@
 pub use tcp::TcpListenerBuilder;
+pub use tls::{TlsAcceptorBuilder, TlsConnectorBuilder};
 
-pub(crate) mod tcp;
+pub mod tcp;
+pub mod tls;

@@ -10,11 +10,11 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
 use crate::cachestr::Cachestr;
-use crate::error::Error;
+use crate::error::CapybaraError;
 use crate::pipeline::stream::load;
 use crate::pipeline::stream::StreamPipelineFactoryExt;
 use crate::pipeline::{PipelineConf, StreamContext};
-use crate::proto::{Listener, Signal, SignalReceiver};
+use crate::proto::{Listener, Signal, Signals};
 use crate::resolver::DEFAULT_RESOLVER;
 use crate::transport::TcpListenerBuilder;
 
@@ -100,8 +100,9 @@ impl StreamListener {
     }
 }
 
+#[async_trait]
 impl Listener for StreamListener {
-    async fn listen(&self, signal_receiver: &mut SignalReceiver) -> crate::Result<()> {
+    async fn listen(&self, signals: &mut Signals) -> crate::Result<()> {
         let l = TcpListenerBuilder::new(self.addr).build()?;
 
         info!("'{}' is listening on {}", &self.id, &self.addr);
@@ -112,7 +113,7 @@ impl Listener for StreamListener {
 
         loop {
             tokio::select! {
-                signal = signal_receiver.recv() => {
+                signal = signals.recv() => {
                     match signal {
                         None => {
                             info!("listener '{}' is stopping....", &self.id);
@@ -166,7 +167,9 @@ impl Handler {
 
         let host_and_port = upstream.split(':').collect::<Vec<&str>>();
         if host_and_port.len() != 2 {
-            bail!(Error::NoAddressResolved(upstream.to_string().into()))
+            bail!(CapybaraError::NoAddressResolved(
+                upstream.to_string().into()
+            ))
         }
         let port: u16 = host_and_port.last().unwrap().parse()?;
         let ip = DEFAULT_RESOLVER
@@ -182,7 +185,7 @@ impl Handler {
         }
 
         let mut upstream = match self.ctx.upstream() {
-            None => bail!(Error::InvalidRoute),
+            None => bail!(CapybaraError::InvalidRoute),
             Some(upstream) => {
                 let addr = Self::resolve(upstream.as_ref()).await?;
                 crate::transport::tcp::dial(addr, None, Self::BUFF_SIZE)?
@@ -228,7 +231,7 @@ mod tests {
 
         let l = StreamListener::builder("127.0.0.1:9999".parse().unwrap())
             .id("fake-stream-listener")
-            .pipeline("capybara.pipelines.stream.route", &c)
+            .pipeline("capybara.pipelines.stream.router", &c)
             .build()?;
 
         l.listen(&mut rx).await?;

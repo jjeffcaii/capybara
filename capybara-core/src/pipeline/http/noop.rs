@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::error::Error;
+use crate::error::CapybaraError;
 use crate::pipeline::{HttpPipelineFactory, PipelineConf};
 use crate::protocol::http::RequestLine;
 
@@ -56,6 +56,6 @@ impl TryFrom<&PipelineConf> for NoopHttpPipelineFactory {
             }
         }
 
-        bail!(Error::InvalidConfig("id".into()))
+        bail!(CapybaraError::InvalidConfig("id".into()))
     }
 }

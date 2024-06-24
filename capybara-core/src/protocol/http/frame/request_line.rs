@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 use bytes::{BufMut, Bytes, BytesMut};
 
-use crate::error::Error::{ExceedMaxHttpHeaderSize, MalformedHttpPacket};
+use crate::error::CapybaraError::{ExceedMaxHttpHeaderSize, MalformedHttpPacket};
 use crate::Result;
 
 enum ParseState {

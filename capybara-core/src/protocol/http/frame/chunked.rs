@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use crate::error::Error::{ExceedMaxHttpBodySize, MalformedHttpPacket};
+use crate::error::CapybaraError::{ExceedMaxHttpBodySize, MalformedHttpPacket};
 use crate::Result;
 
 #[derive(Default, Clone)]

@@ -24,6 +24,15 @@ async fn register_http_pipeline() {
             Err(e) => error!("register '{}' occurs an error: {}", name, e),
         }
     }
+
+    {
+        use crate::pipeline::http::HttpPipelineRouterFactory as Factory;
+        let name = "capybara.pipelines.http.router";
+        match register(name, |c| Factory::try_from(c)).await {
+            Ok(()) => info!("register '{}' ok", name),
+            Err(e) => error!("register '{}' occurs an error: {}", name, e),
+        }
+    }
 }
 
 #[inline(always)]
@@ -32,7 +41,7 @@ async fn register_stream_pipeline() {
 
     {
         use crate::pipeline::stream::RouteStreamPipelineFactory as Factory;
-        let name = "capybara.pipelines.stream.route";
+        let name = "capybara.pipelines.stream.router";
         match register(name, |c| Factory::try_from(c)).await {
             Ok(()) => info!("register '{}' ok", name),
             Err(e) => error!("register '{}' occurs an error: {}", name, e),

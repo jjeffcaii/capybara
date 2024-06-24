@@ -8,23 +8,11 @@ pub enum Signal {
     Reload,
 }
 
-pub type SignalReceiver = tokio::sync::mpsc::Receiver<Signal>;
+pub type Signals = tokio::sync::mpsc::Receiver<Signal>;
 
-pub trait Pipeline: 'static + Send + Sync {
-    type Context;
-    type Input;
-    type Output;
-
-    async fn handle(
-        &mut self,
-        ctx: &mut Self::Context,
-        input: &mut Self::Input,
-        output: &mut Self::Output,
-    ) -> Result<()>;
-}
-
+#[async_trait]
 pub trait Listener: Send + Sync + 'static {
-    async fn listen(&self, signal: &mut SignalReceiver) -> Result<()>;
+    async fn listen(&self, signals: &mut Signals) -> Result<()>;
 }
 
 #[async_trait]

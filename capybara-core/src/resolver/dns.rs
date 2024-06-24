@@ -20,7 +20,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinSet;
 
 use crate::cachestr::Cachestr;
-use crate::{Error, Result};
+use crate::{CapybaraError, Result};
 
 use super::Resolver;
 
@@ -224,7 +224,7 @@ impl Resolver for StandardDNSResolver {
                     Ok(c) => Ok(c.v),
                     Err(e) => {
                         error!("failed to resolve address '{}': {:?}", addr, e);
-                        Err(Error::NoAddressResolved(addr.to_string().into()))
+                        Err(CapybaraError::NoAddressResolved(addr.to_string().into()))
                     }
                 }
             }

@@ -1,4 +1,5 @@
 use std::hash::Hasher;
+use std::str::FromStr;
 
 use once_cell::sync::Lazy;
 use strum_macros::EnumIter;
@@ -274,6 +275,20 @@ impl Into<u16> for HttpField {
     fn into(self) -> u16 {
         let (_, m) = self.get();
         *m
+    }
+}
+
+impl FromStr for HttpField {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use strum::IntoEnumIterator;
+        for next in Self::iter() {
+            if next.as_str().eq_ignore_ascii_case(s) {
+                return Ok(next);
+            }
+        }
+        bail!("invalid http field '{}'", s)
     }
 }
 

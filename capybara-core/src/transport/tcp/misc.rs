@@ -5,7 +5,7 @@ use std::time::Duration;
 use socket2::{Domain, Protocol, SockAddr, Type};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::Error;
+use crate::error::CapybaraError;
 use crate::Result;
 
 pub struct TcpListenerBuilder {
@@ -147,7 +147,7 @@ pub(crate) fn is_health(conn: &TcpStream) -> Result<()> {
                     conn.local_addr()
                 );
             }
-            Err(Error::InvalidConnection)
+            Err(CapybaraError::InvalidConnection)
         }
         Err(ref e) if e.kind() == WouldBlock => {
             // check if connection is writeable
@@ -158,14 +158,14 @@ pub(crate) fn is_health(conn: &TcpStream) -> Result<()> {
                         conn.local_addr(),
                         e
                     );
-                    return Err(Error::InvalidConnection);
+                    return Err(CapybaraError::InvalidConnection);
                 }
             }
             Ok(())
         }
         Err(e) => {
             error!("broken connection {:?}: {}", conn.local_addr(), e);
-            Err(Error::InvalidConnection)
+            Err(CapybaraError::InvalidConnection)
         }
     }
 }

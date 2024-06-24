@@ -1,12 +1,14 @@
 pub use body::Body;
 pub use chunked::Chunks;
 pub use header::Headers;
+pub use query::{Queries, Query};
 pub use request_line::RequestLine;
 pub use status_line::StatusLine;
 
 mod body;
 mod chunked;
 mod header;
+mod query;
 mod request_line;
 mod status_line;
 

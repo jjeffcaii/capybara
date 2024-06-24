@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 
-use crate::error::Error::ExceedMaxHttpBodySize;
+use crate::error::CapybaraError::ExceedMaxHttpBodySize;
 use crate::protocol::http::httpfield::HttpField;
 
 use super::frame::{Body, Chunks, Headers, HttpFrame, RequestLine, StatusLine};

@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use bitflags::bitflags;
+use parking_lot::RwLock;
 
+use crate::cachestr::Cachestr;
 use crate::pipeline::misc;
 use crate::protocol::http::{Headers, RequestLine, StatusLine};
 
@@ -44,6 +46,7 @@ impl HttpContextBuilder {
             flags,
             client_addr,
             pipelines: (AtomicUsize::new(1), pipelines),
+            upstream: RwLock::new(None),
         }
     }
 }
@@ -61,6 +64,7 @@ pub struct HttpContext {
     id: u64,
     flags: HttpContextFlags,
     client_addr: SocketAddr,
+    upstream: RwLock<Option<Cachestr>>,
     pipelines: (AtomicUsize, Vec<Box<dyn HttpPipeline>>),
 }
 
@@ -91,6 +95,19 @@ impl HttpContext {
             return Some(root.as_ref());
         }
         None
+    }
+
+    pub(crate) fn upstream(&self) -> Option<Cachestr> {
+        let r = self.upstream.read();
+        Clone::clone(&r)
+    }
+
+    pub fn set_upstream<U>(&self, upstream: U)
+    where
+        U: AsRef<str>,
+    {
+        let mut w = self.upstream.write();
+        w.replace(Cachestr::from(upstream.as_ref()));
     }
 
     /// Returns the next http pipeline.

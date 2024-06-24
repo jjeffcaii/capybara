@@ -215,7 +215,7 @@ impl Manager {
 
 impl managed::Manager for Manager {
     type Type = TcpStream;
-    type Error = crate::Error;
+    type Error = crate::CapybaraError;
 
     async fn create(&self) -> std::result::Result<Self::Type, Self::Error> {
         let c = self.connect().await?;

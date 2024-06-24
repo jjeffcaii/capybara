@@ -1,10 +1,12 @@
 pub(crate) use noop::{NoopHttpPipeline, NoopHttpPipelineFactory};
 pub use pipeline::{HttpContext, HttpPipeline};
+pub(crate) use pipeline_router::HttpPipelineRouterFactory;
 pub(crate) use registry::{load, HttpPipelineFactoryExt};
 pub use registry::{register, HttpPipelineFactory};
 
 mod noop;
 mod pipeline;
+mod pipeline_router;
 mod registry;
 
 #[cfg(test)]

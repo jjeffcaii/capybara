@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use bytes::Bytes;
+use tokio::io::AsyncWriteExt;
 
 use super::chunked::{Chunks, Iter};
 
@@ -14,6 +15,35 @@ pub enum Body {
 }
 
 impl Body {
+    pub async fn write_to<W>(self, w: &mut W) -> anyhow::Result<()>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
+        match self {
+            Body::Empty => (),
+            Body::Raw(mut raw) => {
+                w.write_all_buf(&mut raw).await?;
+            }
+            Body::Chunked(chunked) => {
+                let mut b = chunked.0;
+                w.write_all_buf(&mut b).await?;
+            }
+            Body::CompositeRaw(all) => {
+                for mut raw in all {
+                    w.write_all_buf(&mut raw).await?;
+                }
+            }
+            Body::CompositeChunked(all) => {
+                for next in all {
+                    let mut b: Bytes = next.into();
+                    w.write_all_buf(&mut b).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn payload_iter(&self) -> impl Iterator<Item = &[u8]> {
         BodyPayloadIterator(match self {
             Body::Empty => PayloadIterKind::Empty,
