@@ -36,3 +36,4 @@ pub mod proto;
 pub mod protocol;
 pub mod resolver;
 pub mod transport;
+mod upstream;

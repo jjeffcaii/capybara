@@ -1,12 +1,17 @@
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use anyhow::Result;
 use bitflags::bitflags;
-use parking_lot::RwLock;
+use hashbrown::HashMap;
+use parking_lot::{Mutex, RwLock};
+use smallvec::{smallvec, SmallVec};
 
 use crate::cachestr::Cachestr;
 use crate::pipeline::misc;
+use crate::proto::UpstreamKind;
 use crate::protocol::http::{Headers, RequestLine, StatusLine};
 
 pub(crate) struct HttpContextBuilder {
@@ -47,6 +52,7 @@ impl HttpContextBuilder {
             client_addr,
             pipelines: (AtomicUsize::new(1), pipelines),
             upstream: RwLock::new(None),
+            reqctx: Default::default(),
         }
     }
 }
@@ -60,12 +66,79 @@ bitflags! {
     }
 }
 
+pub(crate) enum StringX {
+    Cache(Cachestr),
+    String(String),
+    Cow(Cow<'static, str>),
+    Arc(Arc<String>),
+}
+
+impl AsRef<str> for StringX {
+    fn as_ref(&self) -> &str {
+        match self {
+            StringX::Cache(c) => c.as_ref(),
+            StringX::String(s) => s.as_ref(),
+            StringX::Cow(c) => c.as_ref(),
+            StringX::Arc(a) => a.as_ref(),
+        }
+    }
+}
+
+pub(crate) enum HeaderOperator {
+    Drop,
+    Add(StringX),
+}
+
+#[derive(Default)]
+pub struct HeadersContext {
+    pub(crate) inner: Mutex<HashMap<Cachestr, SmallVec<[HeaderOperator; 8]>>>,
+}
+
+impl HeadersContext {
+    pub fn drop<A>(&self, header: A)
+    where
+        A: AsRef<str>,
+    {
+        let k = Cachestr::from(header.as_ref());
+        let v = smallvec![HeaderOperator::Drop];
+        let mut w = self.inner.lock();
+        w.insert(k, v);
+    }
+
+    pub fn replace<K, V>(&self, header: K, value: V)
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let k = Cachestr::from(header.as_ref());
+        let v = smallvec![
+            HeaderOperator::Drop,
+            HeaderOperator::Add(StringX::Cache(Cachestr::from(value.as_ref())))
+        ];
+
+        let mut w = self.inner.lock();
+        w.insert(k, v);
+    }
+}
+
+#[derive(Default)]
+pub struct RequestContext {
+    pub(crate) headers: HeadersContext,
+}
+
+impl RequestContext {
+    pub fn headers(&self) -> &HeadersContext {
+        &self.headers
+    }
+}
+
 pub struct HttpContext {
     id: u64,
     flags: HttpContextFlags,
     client_addr: SocketAddr,
-    upstream: RwLock<Option<Cachestr>>,
+    upstream: RwLock<Option<Arc<UpstreamKind>>>,
     pipelines: (AtomicUsize, Vec<Box<dyn HttpPipeline>>),
+    pub(crate) reqctx: RequestContext,
 }
 
 impl HttpContext {
@@ -75,6 +148,10 @@ impl HttpContext {
             flags: Default::default(),
             pipelines: vec![],
         }
+    }
+
+    pub(crate) fn request(&self) -> &RequestContext {
+        &self.reqctx
     }
 
     pub(crate) fn flags(&self) -> HttpContextFlags {
@@ -97,17 +174,14 @@ impl HttpContext {
         None
     }
 
-    pub(crate) fn upstream(&self) -> Option<Cachestr> {
+    pub(crate) fn upstream(&self) -> Option<Arc<UpstreamKind>> {
         let r = self.upstream.read();
         Clone::clone(&r)
     }
 
-    pub fn set_upstream<U>(&self, upstream: U)
-    where
-        U: AsRef<str>,
-    {
+    pub fn set_upstream(&self, upstream: UpstreamKind) {
         let mut w = self.upstream.write();
-        w.replace(Cachestr::from(upstream.as_ref()));
+        w.replace(Arc::new(upstream));
     }
 
     /// Returns the next http pipeline.

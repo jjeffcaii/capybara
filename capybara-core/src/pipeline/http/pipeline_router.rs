@@ -1,13 +1,17 @@
 use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::num::ParseIntError;
 use std::sync::Arc;
 
 use arc_swap::Cache;
+use rustls::ServerName;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::cachestr::Cachestr;
 use crate::error::CapybaraError;
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
+use crate::proto::UpstreamKind;
 use crate::protocol::http::{Headers, HttpField, Queries, RequestLine};
 
 struct Route {
@@ -105,7 +109,7 @@ impl HttpPipeline for HttpPipelineRouter {
         };
 
         if let Some(upstream) = self.compute_upstream(&request_line, headers).await {
-            ctx.set_upstream(upstream);
+            ctx.set_upstream(upstream.parse()?);
         }
 
         match ctx.next() {
@@ -299,7 +303,10 @@ mod tests {
             let mut headers = Headers::builder().put("Host", "httpbin.org").build();
             assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
             assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
-            assert_eq!(Some("127.0.0.1:80"), ctx.upstream().as_deref());
+            assert_eq!(
+                Some("tcp://127.0.0.1:80"),
+                ctx.upstream().map(|it| it.to_string()).as_deref()
+            );
         }
 
         // route with header
@@ -309,7 +316,10 @@ mod tests {
             let mut headers = Headers::builder().put("x-your-service", "foo").build();
             assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
             assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
-            assert_eq!(Some("127.0.0.2:80"), ctx.upstream().as_deref());
+            assert_eq!(
+                Some("tcp://127.0.0.2:80"),
+                ctx.upstream().map(|it| it.to_string()).as_deref()
+            );
         }
 
         // route with path
@@ -319,7 +329,10 @@ mod tests {
             let mut headers = Headers::builder().build();
             assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
             assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
-            assert_eq!(Some("127.0.0.3:80"), ctx.upstream().as_deref());
+            assert_eq!(
+                Some("tcp://127.0.0.3:80"),
+                ctx.upstream().map(|it| it.to_string()).as_deref()
+            );
         }
 
         // route with query
@@ -329,7 +342,10 @@ mod tests {
             let mut headers = Headers::builder().build();
             assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
             assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
-            assert_eq!(Some("127.0.0.4:80"), ctx.upstream().as_deref());
+            assert_eq!(
+                Some("tcp://127.0.0.4:80"),
+                ctx.upstream().map(|it| it.to_string()).as_deref()
+            );
         }
 
         Ok(())

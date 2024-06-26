@@ -16,6 +16,9 @@ pub enum CapybaraError {
     #[error("invalid tls configuration '{0}'")]
     InvalidTlsConfig(Cow<'static, str>),
 
+    #[error("invalid tls sni '{0}'")]
+    InvalidTlsSni(Cow<'static, str>),
+
     #[error("malformed tls config: {0}")]
     MalformedTlsConfig(anyhow::Error),
 
@@ -42,6 +45,9 @@ pub enum CapybaraError {
 
     #[error("no address resolved from '{0}'")]
     NoAddressResolved(/* domain */ Cow<'static, str>),
+
+    #[error("cannot parse upstream from '{0}'")]
+    InvalidUpstream(Cow<'static, str>),
 
     #[error(transparent)]
     Other(#[from] anyhow::Error), // source and Display delegate to anyhow::Error

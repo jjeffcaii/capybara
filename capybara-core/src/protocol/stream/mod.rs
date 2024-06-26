@@ -17,6 +17,7 @@ use crate::pipeline::{PipelineConf, StreamContext};
 use crate::proto::{Listener, Signal, Signals};
 use crate::resolver::DEFAULT_RESOLVER;
 use crate::transport::TcpListenerBuilder;
+use crate::upstream::ClientStream;
 
 pub struct StreamListenerBuilder {
     addr: SocketAddr,
@@ -186,19 +187,32 @@ impl Handler {
 
         let mut upstream = match self.ctx.upstream() {
             None => bail!(CapybaraError::InvalidRoute),
-            Some(upstream) => {
-                let addr = Self::resolve(upstream.as_ref()).await?;
-                crate::transport::tcp::dial(addr, None, Self::BUFF_SIZE)?
+            Some(upstream) => crate::upstream::establish(&upstream, Self::BUFF_SIZE).await?,
+        };
+
+        use tokio::io::copy_bidirectional_with_sizes as copy;
+
+        let (in_bytes, out_bytes) = match &mut upstream {
+            ClientStream::Tcp(inner) => {
+                copy(
+                    &mut self.downstream,
+                    inner,
+                    Self::BUFF_SIZE,
+                    Self::BUFF_SIZE,
+                )
+                .await?
+            }
+            ClientStream::Tls(inner) => {
+                copy(
+                    &mut self.downstream,
+                    inner,
+                    Self::BUFF_SIZE,
+                    Self::BUFF_SIZE,
+                )
+                .await?
             }
         };
 
-        let (in_bytes, out_bytes) = tokio::io::copy_bidirectional_with_sizes(
-            &mut self.downstream,
-            &mut upstream,
-            Self::BUFF_SIZE,
-            Self::BUFF_SIZE,
-        )
-        .await?;
         debug!("copy bidirectional ok: in={}, out={}", in_bytes, out_bytes);
 
         Ok(())

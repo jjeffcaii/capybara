@@ -1,11 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use anyhow::Result;
 use parking_lot::RwLock;
 
 use crate::cachestr::Cachestr;
 use crate::pipeline::misc;
+use crate::proto::UpstreamKind;
 
 pub(crate) struct StreamContextBuilder {
     client_addr: SocketAddr,
@@ -42,7 +44,7 @@ impl StreamContextBuilder {
 pub struct StreamContext {
     id: u64,
     client_addr: SocketAddr,
-    upstream: RwLock<Option<Cachestr>>,
+    upstream: RwLock<Option<Arc<UpstreamKind>>>,
     pipelines: (AtomicUsize, Vec<Box<dyn StreamPipeline>>),
 }
 
@@ -58,17 +60,14 @@ impl StreamContext {
         self.client_addr
     }
 
-    pub(crate) fn upstream(&self) -> Option<Cachestr> {
+    pub(crate) fn upstream(&self) -> Option<Arc<UpstreamKind>> {
         let r = self.upstream.read();
         Clone::clone(&r)
     }
 
-    pub fn set_upstream<A>(&self, upstream: A)
-    where
-        A: AsRef<str>,
-    {
+    pub fn set_upstream(&self, upstream: UpstreamKind) {
         let mut w = self.upstream.write();
-        w.replace(Cachestr::from(upstream.as_ref()));
+        w.replace(Arc::new(upstream));
     }
 
     pub(crate) fn reset_pipeline(&self) -> Option<&dyn StreamPipeline> {

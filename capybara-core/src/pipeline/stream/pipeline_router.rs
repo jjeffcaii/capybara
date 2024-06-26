@@ -1,10 +1,10 @@
-use crate::CapybaraError;
 use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::cachestr::Cachestr;
 use crate::pipeline::stream::{StreamContext, StreamPipeline, StreamPipelineFactory};
 use crate::pipeline::PipelineConf;
+use crate::CapybaraError;
 
 pub(crate) struct RouteStreamPipeline {
     upstream: Cachestr,
@@ -13,7 +13,7 @@ pub(crate) struct RouteStreamPipeline {
 #[async_trait]
 impl StreamPipeline for RouteStreamPipeline {
     async fn handle_connect(&self, ctx: &StreamContext) -> Result<()> {
-        ctx.set_upstream(self.upstream.as_ref());
+        ctx.set_upstream(self.upstream.parse()?);
         match ctx.next() {
             None => Ok(()),
             Some(next) => next.handle_connect(ctx).await,

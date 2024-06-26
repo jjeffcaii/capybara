@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
           matches:
           - location: host
             match: httpbin.org
-        fallback: envoyproxy.io:443
+        fallback: www.envoyproxy.io:443
         "#;
         serde_yaml::from_str(yaml).unwrap()
     };
@@ -42,8 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Test request when server is started:
     //   1. proxypass httpbin.org: curl -i -H 'Host: httpbin.org' https://localhost:8443/anything
-    // TODO: need support feature of Host modify
-    //   2. proxypass envoyproxy.io, just open link 'https://localhost:8443/' in your web browser
+    //   2. proxypass www.envoyproxy.io, just open link 'https://localhost:8443/' in your web browser
     let l = HttpListener::builder("127.0.0.1:8443".parse()?)
         .id("httpbin")
         .tls(tls_acceptor)

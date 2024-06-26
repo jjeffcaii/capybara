@@ -1,4 +1,5 @@
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::fmt::{Debug, Display, Formatter};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::num::ParseIntError;
 use std::sync::Arc;
 
@@ -7,6 +8,8 @@ use arc_swap::{ArcSwap, Cache};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use rustls::ServerName;
+use serde::Serializer;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
@@ -15,13 +18,14 @@ use tokio_util::codec::FramedRead;
 use uuid::uuid;
 
 use crate::cachestr::Cachestr;
-use crate::pipeline::http::{load, HttpPipelineFactoryExt};
+use crate::pipeline::http::{load, HeaderOperator, HttpPipelineFactoryExt};
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
-use crate::proto::{Listener, Signal, Signals};
+use crate::proto::{Listener, Signal, Signals, UpstreamKind};
 use crate::protocol::http::codec::Flags;
-use crate::protocol::http::{Headers, HttpCodec, HttpFrame, RequestLine};
+use crate::protocol::http::{misc, Headers, HttpCodec, HttpField, HttpFrame, RequestLine};
 use crate::resolver::{Resolver, DEFAULT_RESOLVER};
-use crate::transport::{TcpListenerBuilder, TlsConnectorBuilder};
+use crate::transport::{tcp, tls};
+use crate::upstream::ClientStream;
 use crate::CapybaraError;
 use crate::Result;
 
@@ -119,7 +123,7 @@ impl HttpListener {
 #[async_trait]
 impl Listener for HttpListener {
     async fn listen(&self, signals: &mut Signals) -> Result<()> {
-        let l = TcpListenerBuilder::new(self.addr).build()?;
+        let l = tcp::TcpListenerBuilder::new(self.addr).build()?;
         let closer = Arc::new(Notify::new());
 
         let mut pipelines = self.build_pipeline_factories()?;
@@ -160,13 +164,14 @@ impl Listener for HttpListener {
                             });
                         }
                         Some(tls) => {
-                            let stream = tls.accept(stream).await?;
-                            let mut handler = Handler::new(ctx, stream, Clone::clone(&closer));
-                            tokio::spawn(async move {
-                                if let Err(e) = handler.handle().await {
-                                    error!("http handler end: {}", e);
-                                }
-                            });
+                            if let Ok(stream) = tls.accept(stream).await{
+                                let mut handler = Handler::new(ctx, stream, Clone::clone(&closer));
+                                tokio::spawn(async move {
+                                    if let Err(e) = handler.handle().await {
+                                        error!("http handler end: {}", e);
+                                    }
+                                });
+                            }
                         }
                     }
 
@@ -178,13 +183,14 @@ impl Listener for HttpListener {
 }
 
 struct Handshake {
-    upstream: Option<TcpStream>,
+    upstream: Option<ClientStream>,
     request_line: RequestLine,
     request_headers: Headers,
 }
 
 struct Handler<S> {
     downstream: (FramedRead<ReadHalf<S>, HttpCodec>, BufWriter<WriteHalf<S>>),
+    deny_headers: roaring::RoaringBitmap,
     ctx: HttpContext,
 }
 
@@ -207,45 +213,11 @@ where
             BufWriter::with_capacity(Self::BUFF_SIZE, wh),
         );
 
-        Self { ctx, downstream }
-    }
-
-    async fn resolve(upstream: Cachestr) -> Result<SocketAddr> {
-        if let Ok(addr) = upstream.parse::<SocketAddr>() {
-            return Ok(addr);
+        Self {
+            ctx,
+            downstream,
+            deny_headers: Default::default(),
         }
-
-        let mut sp = upstream.splitn(2, ':');
-
-        match sp.next() {
-            None => Err(CapybaraError::NoAddressResolved(
-                upstream.to_string().into(),
-            )),
-            Some(host) => {
-                let ip = DEFAULT_RESOLVER.resolve_one(host).await?;
-                match sp.next() {
-                    None => Ok(SocketAddr::new(ip, 80)),
-                    Some(port) => match port.parse::<u16>() {
-                        Ok(port) => Ok(SocketAddr::new(ip, port)),
-                        Err(_e) => Err(CapybaraError::NoAddressResolved(
-                            upstream.to_string().into(),
-                        )),
-                    },
-                }
-            }
-        }
-    }
-
-    async fn establish(upstream: Cachestr) -> Result<TcpStream> {
-        let addr = Self::resolve(upstream).await?;
-
-        use crate::transport::tcp;
-
-        let stream = tcp::dial(addr, None, Self::BUFF_SIZE)?;
-
-        debug!("establish tcpconn {} ok", addr);
-
-        Ok(stream)
     }
 
     #[inline]
@@ -261,12 +233,72 @@ where
         let mut b: Bytes = request_line.into();
         w.write_all_buf(&mut b).await?;
 
-        let mut b: Bytes = headers.into();
-        w.write_all_buf(&mut b).await?;
+        let mut bu = Headers::builder();
+        {
+            let r = self.ctx.reqctx.headers.inner.lock();
+            if !r.is_empty() {
+                for (name, operators) in r.iter() {
+                    for op in operators.iter() {
+                        match op {
+                            HeaderOperator::Drop => {
+                                for pos in headers.positions(name.as_ref()) {
+                                    self.deny_headers.insert(pos as u32);
+                                }
+                            }
+                            HeaderOperator::Add(val) => {
+                                bu = bu.put(name.as_ref(), val.as_ref());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !bu.is_empty() {
+            let mut extra_headers: Bytes = bu.build().into();
+            w.write_all_buf(&mut extra_headers).await?;
+        }
+
+        // 1. no blacklist headers
+        if self.deny_headers.is_empty() {
+            let mut b: Bytes = headers.into();
+            w.write_all_buf(&mut b).await?;
+            return Ok(());
+        }
+
+        // 2. deny blacklist headers
+        let length = headers.len();
+        for (i, mut b) in headers.into_iter().enumerate() {
+            if !self.deny_headers.contains(i as u32) {
+                w.write_all_buf(&mut b).await?;
+            }
+        }
+
+        w.write_all(misc::CRLF).await?;
+
+        self.deny_headers.clear();
 
         w.flush().await?;
 
         Ok(())
+    }
+
+    fn set_request_sni(&self, sni: &ServerName) {
+        match sni {
+            ServerName::DnsName(name) => {
+                self.ctx
+                    .request()
+                    .headers()
+                    .replace(HttpField::Host.as_str(), name.as_ref());
+            }
+            ServerName::IpAddress(ip) => {
+                self.ctx
+                    .request()
+                    .headers()
+                    .replace(HttpField::Host.as_str(), ip.to_string());
+            }
+            _ => {}
+        }
     }
 
     #[inline]
@@ -281,10 +313,15 @@ where
                     p.handle_request_line(&self.ctx, &mut request_line).await?;
                 }
 
-                let mut upstream = None;
+                let mut upstream: Option<ClientStream> = None;
 
-                if let Some(u) = self.ctx.upstream() {
-                    upstream.replace(Self::establish(u).await?);
+                if let Some(kind) = self.ctx.upstream() {
+                    upstream.replace(crate::upstream::establish(&kind, Self::BUFF_SIZE).await?);
+                    match &*kind {
+                        UpstreamKind::Tls(_, sni) => self.set_request_sni(sni),
+                        UpstreamKind::TlsHP(_, _, sni) => self.set_request_sni(sni),
+                        _ => (),
+                    }
                 }
 
                 match self.downstream.0.next().await {
@@ -298,8 +335,15 @@ where
                         }
 
                         if upstream.is_none() {
-                            if let Some(u) = self.ctx.upstream() {
-                                upstream.replace(Self::establish(u).await?);
+                            if let Some(kind) = self.ctx.upstream() {
+                                upstream.replace(
+                                    crate::upstream::establish(&kind, Self::BUFF_SIZE).await?,
+                                );
+                                match &*kind {
+                                    UpstreamKind::Tls(_, sni) => self.set_request_sni(sni),
+                                    UpstreamKind::TlsHP(_, _, sni) => self.set_request_sni(sni),
+                                    _ => (),
+                                }
                             }
                         }
 
@@ -375,6 +419,47 @@ where
         Ok(())
     }
 
+    #[inline]
+    async fn transfer<U>(
+        &mut self,
+        upstream: &mut U,
+        request_line: RequestLine,
+        request_headers: Headers,
+    ) -> anyhow::Result<()>
+    where
+        U: AsyncWrite + AsyncRead + Unpin,
+    {
+        let (r, w) = tokio::io::split(upstream);
+        let mut w = BufWriter::with_capacity(Self::BUFF_SIZE, w);
+        self.write_request_half(&mut w, request_line, request_headers)
+            .await?;
+
+        while let Some(next) = self.downstream.0.next().await {
+            let next = next?;
+
+            match next {
+                HttpFrame::PartialBody(body) => {
+                    body.write_to(&mut w).await?;
+                    w.flush().await?;
+                }
+                HttpFrame::CompleteBody(body) => {
+                    body.write_to(&mut w).await?;
+                    w.flush().await?;
+
+                    let codec = HttpCodec::new(Flags::RESPONSE, None, None);
+                    let mut r = FramedRead::with_capacity(r, codec, Self::BUFF_SIZE);
+
+                    self.exchange(&mut r).await?;
+
+                    break;
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        Ok(())
+    }
+
     async fn handle(&mut self) -> anyhow::Result<()> {
         loop {
             match self.handshake().await {
@@ -384,97 +469,14 @@ where
                     request_headers,
                 })) => {
                     match upstream {
-                        Some(mut upstream) => {
-                            match upstream.peer_addr() {
-                                Ok(ref peer) if peer.port() == 443 => {
-                                    let tls_connector = TlsConnectorBuilder::default().build()?;
-                                    let sni = {
-                                        let mut sni = None;
-
-                                        if let Some(u) = self.ctx.upstream() {
-                                            if let Some(host) = u.split(':').next() {
-                                                if let Ok(v) = rustls::ServerName::try_from(host) {
-                                                    sni.replace(v);
-                                                }
-                                            }
-                                        }
-
-                                        sni.unwrap_or_else(|| {
-                                            rustls::ServerName::IpAddress(peer.ip())
-                                        })
-                                    };
-                                    let mut upstream = tls_connector.connect(sni, upstream).await?;
-                                    let (r, w) = tokio::io::split(&mut upstream);
-                                    let mut w = BufWriter::with_capacity(Self::BUFF_SIZE, w);
-                                    self.write_request_half(&mut w, request_line, request_headers)
-                                        .await?;
-
-                                    while let Some(next) = self.downstream.0.next().await {
-                                        let next = next?;
-
-                                        match next {
-                                            HttpFrame::CompleteBody(body) => {
-                                                body.write_to(&mut w).await?;
-                                                w.flush().await?;
-
-                                                let mut r = {
-                                                    let codec =
-                                                        HttpCodec::new(Flags::RESPONSE, None, None);
-                                                    FramedRead::with_capacity(
-                                                        r,
-                                                        codec,
-                                                        Self::BUFF_SIZE,
-                                                    )
-                                                };
-                                                self.exchange(&mut r).await?;
-
-                                                break;
-                                            }
-                                            HttpFrame::PartialBody(body) => {
-                                                body.write_to(&mut w).await?;
-                                                w.flush().await?;
-                                            }
-                                            _ => unreachable!(),
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    let (r, w) = tokio::io::split(&mut upstream);
-                                    let mut w = BufWriter::with_capacity(Self::BUFF_SIZE, w);
-                                    self.write_request_half(&mut w, request_line, request_headers)
-                                        .await?;
-
-                                    while let Some(next) = self.downstream.0.next().await {
-                                        let next = next?;
-
-                                        match next {
-                                            HttpFrame::CompleteBody(body) => {
-                                                body.write_to(&mut w).await?;
-                                                w.flush().await?;
-
-                                                let mut r = {
-                                                    let codec =
-                                                        HttpCodec::new(Flags::RESPONSE, None, None);
-                                                    FramedRead::with_capacity(
-                                                        r,
-                                                        codec,
-                                                        Self::BUFF_SIZE,
-                                                    )
-                                                };
-                                                self.exchange(&mut r).await?;
-
-                                                break;
-                                            }
-                                            HttpFrame::PartialBody(body) => {
-                                                body.write_to(&mut w).await?;
-                                                w.flush().await?;
-                                            }
-                                            _ => unreachable!(),
-                                        }
-                                    }
-                                }
-                            };
-                        }
+                        Some(mut upstream) => match &mut upstream {
+                            ClientStream::Tcp(stream) => {
+                                self.transfer(stream, request_line, request_headers).await?
+                            }
+                            ClientStream::Tls(stream) => {
+                                self.transfer(stream, request_line, request_headers).await?
+                            }
+                        },
                         None => {
                             // TODO: 502 bad gateway
                             bail!("502 bad gateway!");

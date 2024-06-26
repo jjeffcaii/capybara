@@ -38,6 +38,7 @@ impl TcpListenerBuilder {
     }
 }
 
+#[inline]
 fn listen(addr: SocketAddr, buff_size: usize, reuse: bool) -> Result<TcpListener> {
     let socket = match &addr {
         SocketAddr::V4(_) => socket2::Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?,
@@ -86,7 +87,45 @@ fn listen(addr: SocketAddr, buff_size: usize, reuse: bool) -> Result<TcpListener
     Ok(TcpListener::from_std(socket.into())?)
 }
 
-pub fn dial(addr: SocketAddr, timeout: Option<Duration>, buff_size: usize) -> Result<TcpStream> {
+pub struct TcpStreamBuilder {
+    addr: SocketAddr,
+    timeout: Option<Duration>,
+    buff_size: usize,
+}
+
+impl TcpStreamBuilder {
+    pub const BUFF_SIZE: usize = 8192;
+
+    pub fn new(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            timeout: None,
+            buff_size: Self::BUFF_SIZE,
+        }
+    }
+
+    pub fn buff_size(mut self, buff_size: usize) -> Self {
+        self.buff_size = buff_size;
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout.replace(timeout);
+        self
+    }
+
+    pub fn build(self) -> Result<TcpStream> {
+        let Self {
+            addr,
+            timeout,
+            buff_size,
+        } = self;
+        dial(addr, timeout, buff_size)
+    }
+}
+
+#[inline]
+fn dial(addr: SocketAddr, timeout: Option<Duration>, buff_size: usize) -> Result<TcpStream> {
     debug!("begin to dial tcp {}", &addr);
 
     let stream = {
@@ -200,7 +239,9 @@ mod tests {
             resolver.resolve_one(domain).await?
         };
 
-        let mut stream = dial(SocketAddr::new(host, 80), None, 4096)?;
+        let mut stream = TcpStreamBuilder::new(SocketAddr::new(host, 80))
+            .buff_size(4096)
+            .build()?;
         stream.write_all(B).await?;
 
         let mut b = BytesMut::with_capacity(8192);

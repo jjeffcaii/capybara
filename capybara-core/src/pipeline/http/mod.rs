@@ -1,5 +1,6 @@
 pub(crate) use noop::{NoopHttpPipeline, NoopHttpPipelineFactory};
-pub use pipeline::{HttpContext, HttpPipeline};
+pub(crate) use pipeline::{HeaderOperator, StringX};
+pub use pipeline::{HeadersContext, HttpContext, HttpPipeline, RequestContext};
 pub(crate) use pipeline_router::HttpPipelineRouterFactory;
 pub(crate) use registry::{load, HttpPipelineFactoryExt};
 pub use registry::{register, HttpPipelineFactory};
