@@ -70,7 +70,10 @@ rustc-hash = { version = "2.0", default-features = false }
 moka = { version = "0.12", features = ["future", "sync"] }
 serde_yaml = "0.9"
 
-
 [[example]]
 name = "httpbin"
 path = "examples/httpbin.rs"
+
+[[example]]
+name = "https"
+path = "examples/https.rs"

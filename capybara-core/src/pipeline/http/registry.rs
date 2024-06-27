@@ -39,6 +39,7 @@ pub trait HttpPipelineFactory: Send + Sync + 'static {
 
 pub(crate) trait HttpPipelineFactoryExt: Send + Sync + 'static {
     fn generate_boxed(&self) -> Result<Box<dyn HttpPipeline>>;
+    fn generate_arc(&self) -> Result<Arc<dyn HttpPipeline>>;
 }
 
 impl<F, T> HttpPipelineFactoryExt for F
@@ -49,6 +50,11 @@ where
     fn generate_boxed(&self) -> Result<Box<dyn HttpPipeline>> {
         let f = self.generate()?;
         Ok(Box::new(f))
+    }
+
+    fn generate_arc(&self) -> Result<Arc<dyn HttpPipeline>> {
+        let f = self.generate()?;
+        Ok(Arc::new(f))
     }
 }
 

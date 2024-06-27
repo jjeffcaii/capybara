@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 
 use crate::cachestr::Cachestr;
 use crate::pipeline::misc;
-use crate::proto::UpstreamKind;
+use crate::proto::UpstreamKey;
 
 pub(crate) struct StreamContextBuilder {
     client_addr: SocketAddr,
@@ -44,7 +44,7 @@ impl StreamContextBuilder {
 pub struct StreamContext {
     id: u64,
     client_addr: SocketAddr,
-    upstream: RwLock<Option<Arc<UpstreamKind>>>,
+    upstream: RwLock<Option<Arc<UpstreamKey>>>,
     pipelines: (AtomicUsize, Vec<Box<dyn StreamPipeline>>),
 }
 
@@ -60,12 +60,12 @@ impl StreamContext {
         self.client_addr
     }
 
-    pub(crate) fn upstream(&self) -> Option<Arc<UpstreamKind>> {
+    pub(crate) fn upstream(&self) -> Option<Arc<UpstreamKey>> {
         let r = self.upstream.read();
         Clone::clone(&r)
     }
 
-    pub fn set_upstream(&self, upstream: UpstreamKind) {
+    pub fn set_upstream(&self, upstream: UpstreamKey) {
         let mut w = self.upstream.write();
         w.replace(Arc::new(upstream));
     }

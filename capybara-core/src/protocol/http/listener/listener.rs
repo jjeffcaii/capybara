@@ -1,9 +1,12 @@
 use std::fmt::{Debug, Display, Formatter};
+use std::io;
+use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::num::ParseIntError;
 use std::sync::Arc;
 
 use anyhow::Error;
+use anyhow::__private::kind::TraitKind;
 use arc_swap::{ArcSwap, Cache};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -18,14 +21,16 @@ use tokio_util::codec::FramedRead;
 use uuid::uuid;
 
 use crate::cachestr::Cachestr;
-use crate::pipeline::http::{load, HeaderOperator, HttpPipelineFactoryExt};
+use crate::pipeline::http::{load, HeaderOperator, HttpContextFlags, HttpPipelineFactoryExt};
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
-use crate::proto::{Listener, Signal, Signals, UpstreamKind};
+use crate::proto::{Listener, Signal, Signals, UpstreamKey};
 use crate::protocol::http::codec::Flags;
-use crate::protocol::http::{misc, Headers, HttpCodec, HttpField, HttpFrame, RequestLine};
+use crate::protocol::http::{
+    misc, Headers, HttpCodec, HttpField, HttpFrame, RequestLine, Response, ResponseFlags,
+};
 use crate::resolver::{Resolver, DEFAULT_RESOLVER};
 use crate::transport::{tcp, tls};
-use crate::upstream::ClientStream;
+use crate::upstream::{ClientStream, Pool, Upstreams};
 use crate::CapybaraError;
 use crate::Result;
 
@@ -67,11 +72,17 @@ impl HttpListenerBuilder {
             tls,
         } = self;
 
+        let closer = Arc::new(Notify::new());
+
+        let upstreams = Upstreams::builder(Clone::clone(&closer)).build();
+
         Ok(HttpListener {
             id: id.unwrap_or_else(|| Cachestr::from(uuid::Uuid::new_v4().to_string())),
             tls,
             addr,
             pipelines: ArcSwap::from_pointee(pipelines),
+            upstreams,
+            closer,
         })
     }
 }
@@ -81,6 +92,8 @@ pub struct HttpListener {
     addr: SocketAddr,
     tls: Option<TlsAcceptor>,
     pipelines: ArcSwap<Vec<(Cachestr, PipelineConf)>>,
+    upstreams: Upstreams,
+    closer: Arc<Notify>,
 }
 
 impl HttpListener {
@@ -113,7 +126,7 @@ impl HttpListener {
         let mut b = HttpContext::builder(client_addr);
 
         for next in factories {
-            b = b.pipeline_box(next.generate_boxed()?);
+            b = b.pipeline_arc(next.generate_arc()?);
         }
 
         Ok(b.build())
@@ -124,7 +137,6 @@ impl HttpListener {
 impl Listener for HttpListener {
     async fn listen(&self, signals: &mut Signals) -> Result<()> {
         let l = tcp::TcpListenerBuilder::new(self.addr).build()?;
-        let closer = Arc::new(Notify::new());
 
         let mut pipelines = self.build_pipeline_factories()?;
 
@@ -154,9 +166,10 @@ impl Listener for HttpListener {
                     debug!("accept a new tcp stream {:?}", &addr);
                     let ctx = Self::build_context(addr, &pipelines[..])?;
 
-                    match &self.tls{
+                    match &self.tls {
                         None => {
-                            let mut handler = Handler::new(ctx, stream, Clone::clone(&closer));
+                            let upstreams = Clone::clone(&self.upstreams);
+                            let mut handler = Handler::new(ctx, stream, Clone::clone(&self.closer), upstreams);
                             tokio::spawn(async move {
                                 if let Err(e) = handler.handle().await {
                                     error!("http handler end: {}", e);
@@ -164,8 +177,9 @@ impl Listener for HttpListener {
                             });
                         }
                         Some(tls) => {
-                            if let Ok(stream) = tls.accept(stream).await{
-                                let mut handler = Handler::new(ctx, stream, Clone::clone(&closer));
+                            if let Ok(stream) = tls.accept(stream).await {
+                                let upstreams = Clone::clone(&self.upstreams);
+                                let mut handler = Handler::new(ctx, stream, Clone::clone(&self.closer), upstreams);
                                 tokio::spawn(async move {
                                     if let Err(e) = handler.handle().await {
                                         error!("http handler end: {}", e);
@@ -183,7 +197,6 @@ impl Listener for HttpListener {
 }
 
 struct Handshake {
-    upstream: Option<ClientStream>,
     request_line: RequestLine,
     request_headers: Headers,
 }
@@ -192,6 +205,7 @@ struct Handler<S> {
     downstream: (FramedRead<ReadHalf<S>, HttpCodec>, BufWriter<WriteHalf<S>>),
     deny_headers: roaring::RoaringBitmap,
     ctx: HttpContext,
+    upstreams: Upstreams,
 }
 
 impl<S> Handler<S> {
@@ -202,7 +216,7 @@ impl<S> Handler<S>
 where
     S: AsyncWrite + AsyncRead + Sync + Send + 'static,
 {
-    fn new(ctx: HttpContext, stream: S, closer: Arc<Notify>) -> Self {
+    fn new(ctx: HttpContext, stream: S, closer: Arc<Notify>, upstreams: Upstreams) -> Self {
         let (rh, wh) = tokio::io::split(stream);
 
         let downstream = (
@@ -216,6 +230,7 @@ where
         Self {
             ctx,
             downstream,
+            upstreams,
             deny_headers: Default::default(),
         }
     }
@@ -235,9 +250,9 @@ where
 
         let mut bu = Headers::builder();
         {
-            let r = self.ctx.reqctx.headers.inner.lock();
-            if !r.is_empty() {
-                for (name, operators) in r.iter() {
+            let h = self.ctx.request().headers();
+            if !h.is_empty() {
+                for (name, operators) in h.inner.iter() {
                     for op in operators.iter() {
                         match op {
                             HeaderOperator::Drop => {
@@ -283,43 +298,58 @@ where
         Ok(())
     }
 
-    fn set_request_sni(&self, sni: &ServerName) {
-        match sni {
-            ServerName::DnsName(name) => {
-                self.ctx
-                    .request()
-                    .headers()
-                    .replace(HttpField::Host.as_str(), name.as_ref());
-            }
-            ServerName::IpAddress(ip) => {
-                self.ctx
-                    .request()
-                    .headers()
-                    .replace(HttpField::Host.as_str(), ip.to_string());
-            }
-            _ => {}
+    #[inline]
+    async fn exhaust_requests(&mut self) -> Result<()> {
+        if self
+            .ctx
+            .flags()
+            .contains(HttpContextFlags::DOWNSTREAM_EXHAUSTED)
+        {
+            return Ok(());
         }
+
+        while let Some(req) = self.downstream.0.next().await {
+            let req = req?;
+            if req.is_complete() {
+                self.ctx
+                    .flags_mut()
+                    .set(HttpContextFlags::DOWNSTREAM_EXHAUSTED, true);
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     #[inline]
     async fn handshake(&mut self) -> Result<Option<Handshake>> {
         match self.downstream.0.next().await {
             Some(first) => {
+                // check io error
+                if let Err(e) = &first {
+                    if let Some(e) = e.downcast_ref::<io::Error>() {
+                        if matches!(e.kind(), ErrorKind::UnexpectedEof) {
+                            return Ok(None);
+                        }
+                    }
+                }
+
                 let HttpFrame::RequestLine(mut request_line) = first? else {
                     unreachable!()
                 };
 
-                if let Some(p) = self.ctx.reset_pipeline() {
-                    p.handle_request_line(&self.ctx, &mut request_line).await?;
+                if let Some(p) = self.ctx.pipeline() {
+                    p.handle_request_line(&mut self.ctx, &mut request_line)
+                        .await?;
                 }
 
-                let mut upstream: Option<ClientStream> = None;
+                let mut has_upstream = false;
 
-                if let Some(kind) = self.ctx.upstream() {
-                    upstream.replace(crate::upstream::establish(&kind, Self::BUFF_SIZE).await?);
-                    match &*kind {
-                        UpstreamKind::Tls(_, sni) => self.set_request_sni(sni),
-                        UpstreamKind::TlsHP(_, _, sni) => self.set_request_sni(sni),
+                if let Some(uk) = self.ctx.upstream() {
+                    has_upstream = true;
+                    match &*uk {
+                        UpstreamKey::Tls(_, sni) => self.set_request_sni(sni),
+                        UpstreamKey::TlsHP(_, _, sni) => self.set_request_sni(sni),
                         _ => (),
                     }
                 }
@@ -330,25 +360,22 @@ where
                             unreachable!()
                         };
 
-                        if let Some(p) = self.ctx.reset_pipeline() {
-                            p.handle_request_headers(&self.ctx, &mut headers).await?;
+                        if let Some(p) = self.ctx.pipeline() {
+                            p.handle_request_headers(&mut self.ctx, &mut headers)
+                                .await?;
                         }
 
-                        if upstream.is_none() {
+                        if !has_upstream {
                             if let Some(kind) = self.ctx.upstream() {
-                                upstream.replace(
-                                    crate::upstream::establish(&kind, Self::BUFF_SIZE).await?,
-                                );
                                 match &*kind {
-                                    UpstreamKind::Tls(_, sni) => self.set_request_sni(sni),
-                                    UpstreamKind::TlsHP(_, _, sni) => self.set_request_sni(sni),
+                                    UpstreamKey::Tls(_, sni) => self.set_request_sni(sni),
+                                    UpstreamKey::TlsHP(_, _, sni) => self.set_request_sni(sni),
                                     _ => (),
                                 }
                             }
                         }
 
                         Ok(Some(Handshake {
-                            upstream,
                             request_line,
                             request_headers: headers,
                         }))
@@ -369,8 +396,9 @@ where
                 unreachable!()
             };
 
-            if let Some(p) = self.ctx.reset_pipeline() {
-                p.handle_status_line(&self.ctx, &mut status_line).await?;
+            if let Some(p) = self.ctx.pipeline() {
+                p.handle_status_line(&mut self.ctx, &mut status_line)
+                    .await?;
             }
 
             if let Some(second) = upstream.next().await {
@@ -378,8 +406,9 @@ where
                     unreachable!()
                 };
 
-                if let Some(p) = self.ctx.reset_pipeline() {
-                    p.handle_response_headers(&self.ctx, &mut headers).await?;
+                if let Some(p) = self.ctx.pipeline() {
+                    p.handle_response_headers(&mut self.ctx, &mut headers)
+                        .await?;
                 }
 
                 // write status_line
@@ -462,33 +491,46 @@ where
 
     async fn handle(&mut self) -> anyhow::Result<()> {
         loop {
+            self.ctx.reset();
+            self.deny_headers.clear();
             match self.handshake().await {
                 Ok(Some(Handshake {
-                    upstream,
                     request_line,
                     request_headers,
-                })) => {
-                    match upstream {
-                        Some(mut upstream) => match &mut upstream {
-                            ClientStream::Tcp(stream) => {
-                                self.transfer(stream, request_line, request_headers).await?
+                })) => match self.ctx.upstream() {
+                    Some(uk) => {
+                        let pool = self.upstreams.get(uk).await?;
+                        match &*pool {
+                            Pool::Tcp(pool) => {
+                                let mut upstream = pool.get().await?;
+                                self.transfer(upstream.as_mut(), request_line, request_headers)
+                                    .await?
                             }
-                            ClientStream::Tls(stream) => {
-                                self.transfer(stream, request_line, request_headers).await?
+                            Pool::Tls(pool) => {
+                                let mut upstream = pool.get().await?;
+                                self.transfer(upstream.as_mut(), request_line, request_headers)
+                                    .await?
                             }
-                        },
-                        None => {
-                            // TODO: 502 bad gateway
-                            bail!("502 bad gateway!");
                         }
                     }
-                }
+                    None => {
+                        self.exhaust_requests().await?;
+                        let resp = Response::builder()
+                            .status_code(502)
+                            .body(include_bytes!("502.html"))
+                            .content_type("text/html")
+                            .build();
+                        resp.write_to(&mut self.downstream.1, ResponseFlags::default())
+                            .await?;
+                        self.downstream.1.flush().await?;
+                    }
+                },
                 Ok(None) => {
                     debug!("outbound connection has no more data");
                     break;
                 }
                 Err(e) => {
-                    error!("handshake failed: {}", e);
+                    error!("http handshake failed: {:?}", e);
                     // TODO: cleanup
                     break;
                 }
@@ -496,6 +538,16 @@ where
         }
 
         Ok(())
+    }
+
+    #[inline(always)]
+    fn set_request_sni(&mut self, sni: &ServerName) {
+        if let ServerName::DnsName(name) = sni {
+            self.ctx
+                .request()
+                .headers()
+                .replace(HttpField::Host.as_str(), name.as_ref());
+        }
     }
 }
 

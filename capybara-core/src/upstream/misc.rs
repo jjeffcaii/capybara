@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use futures::AsyncRead;
 use tokio::net::TcpStream;
 
-use crate::proto::UpstreamKind;
+use crate::proto::UpstreamKey;
 use crate::resolver::DEFAULT_RESOLVER;
 use crate::transport::{tcp, tls};
 use crate::Result;
@@ -28,21 +28,21 @@ impl Display for ClientStream {
     }
 }
 
-pub(crate) async fn establish(upstream: &UpstreamKind, buff_size: usize) -> Result<ClientStream> {
+pub(crate) async fn establish(upstream: &UpstreamKey, buff_size: usize) -> Result<ClientStream> {
     let stream = match upstream {
-        UpstreamKind::Tcp(addr) => ClientStream::Tcp(
+        UpstreamKey::Tcp(addr) => ClientStream::Tcp(
             tcp::TcpStreamBuilder::new(*addr)
                 .buff_size(buff_size)
                 .build()?,
         ),
-        UpstreamKind::Tls(addr, sni) => {
+        UpstreamKey::Tls(addr, sni) => {
             let stream = tcp::TcpStreamBuilder::new(*addr)
                 .buff_size(buff_size)
                 .build()?;
             let c = tls::TlsConnectorBuilder::new().build()?;
             ClientStream::Tls(c.connect(Clone::clone(sni), stream).await?)
         }
-        UpstreamKind::TcpHP(domain, port) => {
+        UpstreamKey::TcpHP(domain, port) => {
             let ip = resolve(domain.as_ref()).await?;
             let addr = SocketAddr::new(ip, *port);
             ClientStream::Tcp(
@@ -51,7 +51,7 @@ pub(crate) async fn establish(upstream: &UpstreamKind, buff_size: usize) -> Resu
                     .build()?,
             )
         }
-        UpstreamKind::TlsHP(domain, port, sni) => {
+        UpstreamKey::TlsHP(domain, port, sni) => {
             let ip = resolve(domain.as_ref()).await?;
             let addr = SocketAddr::new(ip, *port);
             let stream = tcp::TcpStreamBuilder::new(addr)

@@ -14,7 +14,7 @@ pub(crate) struct NoopHttpPipeline {
 impl HttpPipeline for NoopHttpPipeline {
     async fn handle_request_line(
         &self,
-        ctx: &HttpContext,
+        ctx: &mut HttpContext,
         request_line: &mut RequestLine,
     ) -> Result<()> {
         let path = request_line.path();

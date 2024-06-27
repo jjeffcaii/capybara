@@ -1,6 +1,12 @@
+use std::sync::Arc;
+
 use bytes::{Bytes, BytesMut};
+use once_cell::sync::Lazy;
 
 pub(crate) const CRLF: &[u8] = b"\r\n";
+
+pub(crate) static SERVER: Lazy<Arc<String>> =
+    Lazy::new(|| Arc::new(format!("capybara/{}", env!("CARGO_PKG_VERSION"))));
 
 #[inline(always)]
 pub(super) fn readline(buf: &mut BytesMut) -> Option<Bytes> {

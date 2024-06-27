@@ -23,23 +23,28 @@ async fn main() -> anyhow::Result<()> {
     let c: PipelineConf = {
         // language=yaml
         let yaml = r#"
-        routes:
-        - route: http://httpbin.org
+        fallback: https://letsencrypt.org
         "#;
         serde_yaml::from_str(yaml).unwrap()
     };
 
-    // Test request when server is started:
-    //   1. proxypass httpbin.org: curl -i -H 'Host: httpbin.org' https://localhost:8443/anything
-    //   2. proxypass www.envoyproxy.io, just open link 'https://localhost:8443/' in your web browser
-    let l = HttpListener::builder("127.0.0.1:8080".parse()?)
-        .id("httpbin")
+    // You can generate pem files following the command below:
+    //   $ mkcert -key-file localhost.key.pem -cert-file localhost.cert.pem localhost
+    let tls_acceptor = TlsAcceptorBuilder::default()
+        .cert(include_str!("localhost.cert.pem"))
+        .key(include_str!("localhost.key.pem"))
+        .build()?;
+
+    // Test request when server is started, open link 'https://localhost:8443/' in your web browser
+    let l = HttpListener::builder("127.0.0.1:8443".parse()?)
+        .id("https-server-example")
+        .tls(tls_acceptor)
         .pipeline("capybara.pipelines.http.router", &c)
         .build()?;
 
     tokio::spawn(async move {
         if let Err(e) = l.listen(&mut rx).await {
-            error!("httpbin server is stopped: {}", e);
+            error!("https server is stopped: {}", e);
         }
     });
 

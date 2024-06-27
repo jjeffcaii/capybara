@@ -1,6 +1,6 @@
 pub use body::Body;
 pub use chunked::Chunks;
-pub use header::Headers;
+pub use header::{Headers, HeadersBuilder};
 pub use query::{Queries, Query};
 pub use request_line::RequestLine;
 pub use status_line::StatusLine;
@@ -19,4 +19,11 @@ pub enum HttpFrame {
     Headers(Headers),
     CompleteBody(Body),
     PartialBody(Body),
+}
+
+impl HttpFrame {
+    #[inline]
+    pub fn is_complete(&self) -> bool {
+        matches!(self, Self::CompleteBody(_))
+    }
 }

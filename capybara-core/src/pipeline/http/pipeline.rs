@@ -1,23 +1,23 @@
 use std::borrow::Cow;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
 use bitflags::bitflags;
 use hashbrown::HashMap;
-use parking_lot::{Mutex, RwLock};
 use smallvec::{smallvec, SmallVec};
 
 use crate::cachestr::Cachestr;
 use crate::pipeline::misc;
-use crate::proto::UpstreamKind;
+use crate::proto::UpstreamKey;
 use crate::protocol::http::{Headers, RequestLine, StatusLine};
+
+type Pipelines = SmallVec<[Arc<dyn HttpPipeline>; 8]>;
 
 pub(crate) struct HttpContextBuilder {
     client_addr: SocketAddr,
     flags: HttpContextFlags,
-    pipelines: Vec<Box<dyn HttpPipeline>>,
+    pipelines: Pipelines,
 }
 
 impl HttpContextBuilder {
@@ -26,11 +26,11 @@ impl HttpContextBuilder {
     where
         P: HttpPipeline,
     {
-        self.pipeline_box(Box::new(pipeline))
+        self.pipeline_arc(Arc::new(pipeline))
     }
 
     #[inline]
-    pub(crate) fn pipeline_box(mut self, pipeline: Box<dyn HttpPipeline>) -> Self {
+    pub(crate) fn pipeline_arc(mut self, pipeline: Arc<dyn HttpPipeline>) -> Self {
         self.pipelines.push(pipeline);
         self
     }
@@ -50,8 +50,8 @@ impl HttpContextBuilder {
             id: misc::sequence(),
             flags,
             client_addr,
-            pipelines: (AtomicUsize::new(1), pipelines),
-            upstream: RwLock::new(None),
+            pipelines: (0, pipelines),
+            upstream: None,
             reqctx: Default::default(),
         }
     }
@@ -62,50 +62,61 @@ pub(crate) struct HttpContextFlags(u32);
 
 bitflags! {
     impl HttpContextFlags: u32 {
-        const _ = 1 << 0;
+        const DOWNSTREAM_EXHAUSTED = 1 << 0;
     }
 }
 
-pub(crate) enum StringX {
+pub(crate) enum AnyString {
     Cache(Cachestr),
     String(String),
     Cow(Cow<'static, str>),
     Arc(Arc<String>),
 }
 
-impl AsRef<str> for StringX {
+impl AsRef<str> for AnyString {
     fn as_ref(&self) -> &str {
         match self {
-            StringX::Cache(c) => c.as_ref(),
-            StringX::String(s) => s.as_ref(),
-            StringX::Cow(c) => c.as_ref(),
-            StringX::Arc(a) => a.as_ref(),
+            AnyString::Cache(c) => c.as_ref(),
+            AnyString::String(s) => s.as_ref(),
+            AnyString::Cow(c) => c.as_ref(),
+            AnyString::Arc(a) => a.as_ref(),
         }
     }
 }
 
 pub(crate) enum HeaderOperator {
     Drop,
-    Add(StringX),
+    Add(AnyString),
 }
 
 #[derive(Default)]
 pub struct HeadersContext {
-    pub(crate) inner: Mutex<HashMap<Cachestr, SmallVec<[HeaderOperator; 8]>>>,
+    pub(crate) inner: HashMap<Cachestr, SmallVec<[HeaderOperator; 8]>>,
 }
 
 impl HeadersContext {
-    pub fn drop<A>(&self, header: A)
+    pub fn reset(&mut self) {
+        self.inner.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn drop<A>(&mut self, header: A)
     where
         A: AsRef<str>,
     {
         let k = Cachestr::from(header.as_ref());
         let v = smallvec![HeaderOperator::Drop];
-        let mut w = self.inner.lock();
-        w.insert(k, v);
+        self.inner.insert(k, v);
     }
 
-    pub fn replace<K, V>(&self, header: K, value: V)
+    pub fn replace<K, V>(&mut self, header: K, value: V)
     where
         K: AsRef<str>,
         V: AsRef<str>,
@@ -113,11 +124,10 @@ impl HeadersContext {
         let k = Cachestr::from(header.as_ref());
         let v = smallvec![
             HeaderOperator::Drop,
-            HeaderOperator::Add(StringX::Cache(Cachestr::from(value.as_ref())))
+            HeaderOperator::Add(AnyString::Cache(Cachestr::from(value.as_ref())))
         ];
 
-        let mut w = self.inner.lock();
-        w.insert(k, v);
+        self.inner.insert(k, v);
     }
 }
 
@@ -127,17 +137,21 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
-    pub fn headers(&self) -> &HeadersContext {
-        &self.headers
+    pub fn headers(&mut self) -> &mut HeadersContext {
+        &mut self.headers
+    }
+
+    pub fn reset(&mut self) {
+        self.headers.reset();
     }
 }
 
 pub struct HttpContext {
-    id: u64,
-    flags: HttpContextFlags,
-    client_addr: SocketAddr,
-    upstream: RwLock<Option<Arc<UpstreamKind>>>,
-    pipelines: (AtomicUsize, Vec<Box<dyn HttpPipeline>>),
+    pub(crate) id: u64,
+    pub(crate) flags: HttpContextFlags,
+    pub(crate) client_addr: SocketAddr,
+    pub(crate) upstream: Option<Arc<UpstreamKey>>,
+    pub(crate) pipelines: (usize, SmallVec<[Arc<dyn HttpPipeline>; 8]>),
     pub(crate) reqctx: RequestContext,
 }
 
@@ -146,50 +160,72 @@ impl HttpContext {
         HttpContextBuilder {
             client_addr,
             flags: Default::default(),
-            pipelines: vec![],
+            pipelines: smallvec![],
         }
     }
 
-    pub(crate) fn request(&self) -> &RequestContext {
-        &self.reqctx
-    }
-
-    pub(crate) fn flags(&self) -> HttpContextFlags {
-        self.flags
-    }
-
+    #[inline]
     pub fn id(&self) -> u64 {
         self.id
     }
 
+    #[inline]
     pub fn client_addr(&self) -> SocketAddr {
         self.client_addr
     }
 
-    pub(crate) fn reset_pipeline(&self) -> Option<&dyn HttpPipeline> {
+    #[inline]
+    pub fn request(&mut self) -> &mut RequestContext {
+        &mut self.reqctx
+    }
+
+    #[inline]
+    pub(crate) fn flags(&self) -> HttpContextFlags {
+        self.flags
+    }
+
+    #[inline]
+    pub(crate) fn flags_mut(&mut self) -> &mut HttpContextFlags {
+        &mut self.flags
+    }
+
+    #[inline]
+    pub(crate) fn pipeline(&mut self) -> Option<Arc<dyn HttpPipeline>> {
         if let Some(root) = self.pipelines.1.first() {
-            self.pipelines.0.store(1, Ordering::SeqCst);
-            return Some(root.as_ref());
+            self.pipelines.0 = 1;
+            return Some(Clone::clone(root));
         }
         None
     }
 
-    pub(crate) fn upstream(&self) -> Option<Arc<UpstreamKind>> {
-        let r = self.upstream.read();
-        Clone::clone(&r)
+    #[inline]
+    pub(crate) fn upstream(&self) -> Option<Arc<UpstreamKey>> {
+        self.upstream.clone()
     }
 
-    pub fn set_upstream(&self, upstream: UpstreamKind) {
-        let mut w = self.upstream.write();
-        w.replace(Arc::new(upstream));
+    #[inline]
+    pub fn set_upstream(&mut self, upstream: UpstreamKey) {
+        self.upstream.replace(upstream.into());
+    }
+
+    #[inline]
+    pub(crate) fn reset(&mut self) {
+        self.reqctx.reset();
+        self.pipelines.0 = 0;
+        self.upstream.take();
+        self.flags = HttpContextFlags::default();
     }
 
     /// Returns the next http pipeline.
-    pub fn next(&self) -> Option<&dyn HttpPipeline> {
-        let seq = self.pipelines.0.fetch_add(1, Ordering::SeqCst);
-        match self.pipelines.1.get(seq) {
+    #[inline]
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<Arc<dyn HttpPipeline>> {
+        match self.pipelines.1.get(self.pipelines.0) {
             None => None,
-            Some(next) => Some(next.as_ref()),
+            Some(next) => {
+                self.pipelines.0 += 1;
+                Some(Clone::clone(next))
+            }
         }
     }
 }
@@ -202,7 +238,7 @@ pub trait HttpPipeline: Send + Sync + 'static {
 
     async fn handle_request_line(
         &self,
-        ctx: &HttpContext,
+        ctx: &mut HttpContext,
         request_line: &mut RequestLine,
     ) -> Result<()> {
         match ctx.next() {
@@ -211,7 +247,11 @@ pub trait HttpPipeline: Send + Sync + 'static {
         }
     }
 
-    async fn handle_request_headers(&self, ctx: &HttpContext, headers: &mut Headers) -> Result<()> {
+    async fn handle_request_headers(
+        &self,
+        ctx: &mut HttpContext,
+        headers: &mut Headers,
+    ) -> Result<()> {
         match ctx.next() {
             None => Ok(()),
             Some(next) => next.handle_request_headers(ctx, headers).await,
@@ -220,7 +260,7 @@ pub trait HttpPipeline: Send + Sync + 'static {
 
     async fn handle_status_line(
         &self,
-        ctx: &HttpContext,
+        ctx: &mut HttpContext,
         status_line: &mut StatusLine,
     ) -> Result<()> {
         match ctx.next() {
@@ -231,7 +271,7 @@ pub trait HttpPipeline: Send + Sync + 'static {
 
     async fn handle_response_headers(
         &self,
-        ctx: &HttpContext,
+        ctx: &mut HttpContext,
         headers: &mut Headers,
     ) -> Result<()> {
         match ctx.next() {

@@ -241,6 +241,15 @@ impl managed::Manager for Manager {
             b.connect(Clone::clone(&self.sni), stream).await?
         };
 
+        if log_enabled!(log::Level::Info) {
+            let (stream, _) = stream.get_ref();
+            info!(
+                "establish pooled tls stream: {:?} -> {:?}",
+                stream.local_addr().unwrap(),
+                stream.peer_addr().unwrap()
+            );
+        }
+
         Ok(stream)
     }
 

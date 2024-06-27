@@ -1,5 +1,5 @@
 pub(crate) use noop::{NoopHttpPipeline, NoopHttpPipelineFactory};
-pub(crate) use pipeline::{HeaderOperator, StringX};
+pub(crate) use pipeline::{AnyString, HeaderOperator, HttpContextFlags};
 pub use pipeline::{HeadersContext, HttpContext, HttpPipeline, RequestContext};
 pub(crate) use pipeline_router::HttpPipelineRouterFactory;
 pub(crate) use registry::{load, HttpPipelineFactoryExt};
@@ -26,7 +26,7 @@ mod tests {
     async fn test_pipelines() -> Result<()> {
         init();
 
-        let ctx = HttpContext::builder("127.0.0.1:12345".parse().unwrap())
+        let mut ctx = HttpContext::builder("127.0.0.1:12345".parse().unwrap())
             .pipeline(NoopHttpPipeline::from(1))
             .pipeline(NoopHttpPipeline::from(2))
             .pipeline(NoopHttpPipeline::from(3))
@@ -34,8 +34,8 @@ mod tests {
 
         let mut rl = RequestLine::builder().uri("/ping").build();
 
-        if let Some(first) = ctx.reset_pipeline() {
-            let _ = first.handle_request_line(&ctx, &mut rl).await;
+        if let Some(first) = ctx.pipeline() {
+            let _ = first.handle_request_line(&mut ctx, &mut rl).await;
         }
 
         Ok(())

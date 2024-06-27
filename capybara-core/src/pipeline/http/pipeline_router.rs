@@ -11,12 +11,12 @@ use tokio::sync::RwLock;
 use crate::cachestr::Cachestr;
 use crate::error::CapybaraError;
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
-use crate::proto::UpstreamKind;
+use crate::proto::UpstreamKey;
 use crate::protocol::http::{Headers, HttpField, Queries, RequestLine};
 
 struct Route {
     must: Vec<MatchRule>,
-    upstream: Cachestr,
+    upstream: UpstreamKey,
 }
 
 enum MatchRule {
@@ -29,7 +29,7 @@ enum MatchRule {
 pub(crate) struct HttpPipelineRouter {
     request_line: RwLock<Option<RequestLine>>,
     routes: Arc<Vec<Route>>,
-    fallback: Option<Cachestr>,
+    fallback: Option<UpstreamKey>,
 }
 
 impl HttpPipelineRouter {
@@ -38,7 +38,7 @@ impl HttpPipelineRouter {
         &self,
         request_line: &RequestLine,
         headers: &mut Headers,
-    ) -> Option<Cachestr> {
+    ) -> Option<UpstreamKey> {
         for mat in &*self.routes {
             let mut bingo = true;
 
@@ -84,7 +84,7 @@ impl HttpPipelineRouter {
 impl HttpPipeline for HttpPipelineRouter {
     async fn handle_request_line(
         &self,
-        ctx: &HttpContext,
+        ctx: &mut HttpContext,
         request_line: &mut RequestLine,
     ) -> anyhow::Result<()> {
         {
@@ -100,7 +100,7 @@ impl HttpPipeline for HttpPipelineRouter {
 
     async fn handle_request_headers(
         &self,
-        ctx: &HttpContext,
+        ctx: &mut HttpContext,
         headers: &mut Headers,
     ) -> anyhow::Result<()> {
         let request_line = {
@@ -109,7 +109,7 @@ impl HttpPipeline for HttpPipelineRouter {
         };
 
         if let Some(upstream) = self.compute_upstream(&request_line, headers).await {
-            ctx.set_upstream(upstream.parse()?);
+            ctx.set_upstream(upstream);
         }
 
         match ctx.next() {
@@ -121,7 +121,7 @@ impl HttpPipeline for HttpPipelineRouter {
 
 pub(crate) struct HttpPipelineRouterFactory {
     routes: Arc<Vec<Route>>,
-    fallback: Option<Cachestr>,
+    fallback: Option<UpstreamKey>,
 }
 
 impl HttpPipelineFactory for HttpPipelineRouterFactory {
@@ -184,19 +184,19 @@ impl TryFrom<&PipelineConf> for HttpPipelineRouterFactory {
                     }
                 }
 
-                routes.push(Route {
-                    upstream: Cachestr::from(rd.route),
-                    must,
-                });
+                let upstream = rd.route.parse::<UpstreamKey>()?;
+
+                routes.push(Route { upstream, must });
             }
 
-            let fallback = rds.fallback.map(Cachestr::from);
-
-            (routes, fallback)
+            match rds.fallback {
+                None => (routes, None),
+                Some(s) => (routes, Some(s.parse::<UpstreamKey>()?)),
+            }
         };
 
-        if routes.is_empty() {
-            bail!(CapybaraError::InvalidConfig("routes".into()));
+        if routes.is_empty() && fallback.is_none() {
+            bail!(CapybaraError::InvalidConfig("routes'|'fallback".into()));
         }
 
         Ok(Self {
@@ -234,7 +234,7 @@ struct RouteDefine<'a> {
 
 #[derive(Serialize, Deserialize)]
 struct RoutesDefine<'a> {
-    #[serde(borrow)]
+    #[serde(borrow, default)]
     routes: Vec<RouteDefine<'a>>,
     fallback: Option<&'a str>,
 }
@@ -288,21 +288,27 @@ mod tests {
 
         // route nothing
         {
-            let ctx = gc();
+            let mut ctx = gc();
             let mut rl = RequestLine::builder().uri("/nothing").build();
             let mut headers = Headers::builder().build();
-            assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
-            assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
+            assert!(p.handle_request_line(&mut ctx, &mut rl).await.is_ok());
+            assert!(p
+                .handle_request_headers(&mut ctx, &mut headers)
+                .await
+                .is_ok());
             assert!(ctx.upstream().is_none());
         }
 
         // route with host
         {
-            let ctx = gc();
+            let mut ctx = gc();
             let mut rl = RequestLine::builder().uri("/anything").build();
             let mut headers = Headers::builder().put("Host", "httpbin.org").build();
-            assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
-            assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
+            assert!(p.handle_request_line(&mut ctx, &mut rl).await.is_ok());
+            assert!(p
+                .handle_request_headers(&mut ctx, &mut headers)
+                .await
+                .is_ok());
             assert_eq!(
                 Some("tcp://127.0.0.1:80"),
                 ctx.upstream().map(|it| it.to_string()).as_deref()
@@ -311,11 +317,14 @@ mod tests {
 
         // route with header
         {
-            let ctx = gc();
+            let mut ctx = gc();
             let mut rl = RequestLine::builder().uri("/anything").build();
             let mut headers = Headers::builder().put("x-your-service", "foo").build();
-            assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
-            assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
+            assert!(p.handle_request_line(&mut ctx, &mut rl).await.is_ok());
+            assert!(p
+                .handle_request_headers(&mut ctx, &mut headers)
+                .await
+                .is_ok());
             assert_eq!(
                 Some("tcp://127.0.0.2:80"),
                 ctx.upstream().map(|it| it.to_string()).as_deref()
@@ -324,11 +333,14 @@ mod tests {
 
         // route with path
         {
-            let ctx = gc();
+            let mut ctx = gc();
             let mut rl = RequestLine::builder().uri("/anything").build();
             let mut headers = Headers::builder().build();
-            assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
-            assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
+            assert!(p.handle_request_line(&mut ctx, &mut rl).await.is_ok());
+            assert!(p
+                .handle_request_headers(&mut ctx, &mut headers)
+                .await
+                .is_ok());
             assert_eq!(
                 Some("tcp://127.0.0.3:80"),
                 ctx.upstream().map(|it| it.to_string()).as_deref()
@@ -337,11 +349,14 @@ mod tests {
 
         // route with query
         {
-            let ctx = gc();
+            let mut ctx = gc();
             let mut rl = RequestLine::builder().uri("/hello?srv=3").build();
             let mut headers = Headers::builder().build();
-            assert!(p.handle_request_line(&ctx, &mut rl).await.is_ok());
-            assert!(p.handle_request_headers(&ctx, &mut headers).await.is_ok());
+            assert!(p.handle_request_line(&mut ctx, &mut rl).await.is_ok());
+            assert!(p
+                .handle_request_headers(&mut ctx, &mut headers)
+                .await
+                .is_ok());
             assert_eq!(
                 Some("tcp://127.0.0.4:80"),
                 ctx.upstream().map(|it| it.to_string()).as_deref()
