@@ -1,9 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
-use futures::AsyncRead;
 use tokio::net::TcpStream;
 
 use crate::proto::UpstreamKey;

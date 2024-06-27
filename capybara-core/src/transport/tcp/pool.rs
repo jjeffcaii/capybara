@@ -1,5 +1,4 @@
-use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,15 +6,11 @@ use std::time::Duration;
 use anyhow::Result;
 use deadpool::managed::{Metrics, RecycleError, RecycleResult};
 use deadpool::{managed, Runtime};
-use hickory_resolver::error::ResolveError;
-use once_cell::sync::Lazy;
-use socket2::SockAddr;
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
 use crate::cachestr::Cachestr;
-use crate::resolver;
-use crate::resolver::{Resolver, StandardDNSResolver};
+use crate::resolver::{self, Resolver};
 use crate::transport::Address;
 
 use super::{misc, TcpStreamBuilder};

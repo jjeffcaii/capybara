@@ -1,37 +1,28 @@
-use std::fmt::{Debug, Display, Formatter};
 use std::io;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::num::ParseIntError;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::Error;
-use anyhow::__private::kind::TraitKind;
-use arc_swap::{ArcSwap, Cache};
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use rustls::ServerName;
-use serde::Serializer;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf};
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::FramedRead;
-use uuid::uuid;
 
 use crate::cachestr::Cachestr;
 use crate::pipeline::http::{load, HeaderOperator, HttpContextFlags, HttpPipelineFactoryExt};
-use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
+use crate::pipeline::{HttpContext, PipelineConf};
 use crate::proto::{Listener, Signal, Signals, UpstreamKey};
 use crate::protocol::http::codec::Flags;
 use crate::protocol::http::{
     misc, Headers, HttpCodec, HttpField, HttpFrame, RequestLine, Response, ResponseFlags,
 };
-use crate::resolver::{Resolver, DEFAULT_RESOLVER};
-use crate::transport::{tcp, tls};
-use crate::upstream::{ClientStream, Pool, Upstreams};
-use crate::CapybaraError;
+use crate::transport::tcp;
+use crate::upstream::{Pool, Upstreams};
 use crate::Result;
 
 pub struct HttpListenerBuilder {

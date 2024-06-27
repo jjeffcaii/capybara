@@ -49,9 +49,11 @@ impl FromStr for UpstreamKey {
                 .map_err(|_| CapybaraError::InvalidTlsSni(sni.to_string().into()))
         }
 
+        // FIXME: too many duplicated codes
+
         if let Some(suffix) = s.strip_prefix("tcp://") {
             let (host, port) = host_and_port(suffix)?;
-            let port = port.ok_or_else(|| CapybaraError::InvalidUpstream("missing port".into()))?;
+            let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
             return Ok(match host.parse::<IpAddr>() {
                 Ok(ip) => UpstreamKey::Tcp(SocketAddr::new(ip, port)),
                 Err(_) => UpstreamKey::TcpHP(Cachestr::from(host), port),
@@ -60,7 +62,7 @@ impl FromStr for UpstreamKey {
 
         if let Some(suffix) = s.strip_prefix("tls://") {
             let (host, port) = host_and_port(suffix)?;
-            let port = port.ok_or_else(|| CapybaraError::InvalidUpstream("missing port".into()))?;
+            let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
             return Ok(match host.parse::<IpAddr>() {
                 Ok(ip) => UpstreamKey::Tls(SocketAddr::new(ip, port), ServerName::IpAddress(ip)),
                 Err(_) => UpstreamKey::TlsHP(Cachestr::from(host), port, to_sni(host)?),
@@ -86,7 +88,7 @@ impl FromStr for UpstreamKey {
         }
 
         let (host, port) = host_and_port(s)?;
-        let port = port.ok_or_else(|| CapybaraError::InvalidUpstream("missing port".into()))?;
+        let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
         Ok(match host.parse::<IpAddr>() {
             Ok(ip) => UpstreamKey::Tcp(SocketAddr::new(ip, port)),
             Err(_) => UpstreamKey::TcpHP(Cachestr::from(host), port),

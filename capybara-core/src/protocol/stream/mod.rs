@@ -3,10 +3,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use futures::Stream;
-use socket2::InterfaceIndexOrAddress::Address;
-use socket2::Socket;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
 use crate::cachestr::Cachestr;
@@ -93,8 +90,8 @@ impl StreamListener {
         let mut b = StreamContext::builder(client_addr);
 
         for factory in factories {
-            let next = factory.generate_boxed()?;
-            b = b.pipeline_boxed(next);
+            let next = factory.generate_arc()?;
+            b = b.pipeline_arc(next);
         }
 
         Ok(b.build())
@@ -182,7 +179,7 @@ impl Handler {
 
     async fn handle(&mut self, _closer: Arc<Notify>) -> anyhow::Result<()> {
         if let Some(p) = self.ctx.reset_pipeline() {
-            p.handle_connect(&self.ctx).await?;
+            p.handle_connect(&mut self.ctx).await?;
         }
 
         let mut upstream = match self.ctx.upstream() {

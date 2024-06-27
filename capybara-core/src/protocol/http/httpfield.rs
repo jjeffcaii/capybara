@@ -1,4 +1,3 @@
-use std::hash::Hasher;
 use std::str::FromStr;
 
 use once_cell::sync::Lazy;

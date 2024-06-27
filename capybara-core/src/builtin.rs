@@ -1,5 +1,3 @@
-use anyhow::Result;
-use slog::Value;
 use tokio::sync::OnceCell;
 
 static ONCE: OnceCell<()> = OnceCell::const_new();

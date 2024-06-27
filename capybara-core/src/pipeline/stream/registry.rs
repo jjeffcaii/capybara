@@ -39,6 +39,7 @@ pub trait StreamPipelineFactory: Send + Sync + 'static {
 
 pub(crate) trait StreamPipelineFactoryExt: Send + Sync + 'static {
     fn generate_boxed(&self) -> Result<Box<dyn StreamPipeline>>;
+    fn generate_arc(&self) -> Result<Arc<dyn StreamPipeline>>;
 }
 
 impl<F, T> StreamPipelineFactoryExt for F
@@ -49,6 +50,11 @@ where
     fn generate_boxed(&self) -> Result<Box<dyn StreamPipeline>> {
         let f = self.generate()?;
         Ok(Box::new(f))
+    }
+
+    fn generate_arc(&self) -> Result<Arc<dyn StreamPipeline>> {
+        let f = self.generate()?;
+        Ok(Arc::new(f))
     }
 }
 

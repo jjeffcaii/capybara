@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ahash::HashSet;
-use async_trait::async_trait;
 use hickory_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
 };
@@ -19,7 +18,6 @@ use rand::Rng;
 use tokio::sync::Notify;
 use tokio::task::JoinSet;
 
-use crate::cachestr::Cachestr;
 use crate::{CapybaraError, Result};
 
 use super::Resolver;

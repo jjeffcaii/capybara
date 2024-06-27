@@ -1,5 +1,4 @@
-use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::str::FromStr;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use socket2::{Domain, Protocol, SockAddr, Type};
