@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bitflags::bitflags;
+use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
 use smallvec::{smallvec, SmallVec};
 
@@ -52,7 +53,8 @@ impl HttpContextBuilder {
             client_addr,
             pipelines: (0, pipelines),
             upstream: None,
-            reqctx: Default::default(),
+            request_ctx: Default::default(),
+            response_ctx: Default::default(),
         }
     }
 }
@@ -95,7 +97,7 @@ pub struct HeadersContext {
 }
 
 impl HeadersContext {
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.inner.clear();
     }
 
@@ -107,6 +109,12 @@ impl HeadersContext {
         self.inner.is_empty()
     }
 
+    #[inline]
+    pub(crate) fn _drop(&mut self, header: Cachestr) {
+        let v = smallvec![HeaderOperator::Drop];
+        self.inner.insert(header, v);
+    }
+
     pub fn drop<A>(&mut self, header: A)
     where
         A: AsRef<str>,
@@ -114,6 +122,16 @@ impl HeadersContext {
         let k = Cachestr::from(header.as_ref());
         let v = smallvec![HeaderOperator::Drop];
         self.inner.insert(k, v);
+    }
+
+    #[inline]
+    pub(crate) fn _replace(&mut self, header: Cachestr, value: AnyString) {
+        let v = smallvec![
+            HeaderOperator::Drop,
+            HeaderOperator::Add(AnyString::Cache(Cachestr::from(value.as_ref())))
+        ];
+
+        self.inner.insert(header, v);
     }
 
     pub fn replace<K, V>(&mut self, header: K, value: V)
@@ -129,6 +147,28 @@ impl HeadersContext {
 
         self.inner.insert(k, v);
     }
+
+    #[inline]
+    pub(crate) fn _append(&mut self, header: Cachestr, value: AnyString) {
+        match self.inner.entry(header) {
+            Entry::Occupied(mut it) => {
+                it.get_mut().push(HeaderOperator::Add(value));
+            }
+            Entry::Vacant(it) => {
+                it.insert(smallvec![HeaderOperator::Add(value)]);
+            }
+        }
+    }
+
+    pub fn append<K, V>(&mut self, header: K, value: V)
+    where
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let k = Cachestr::from(header.as_ref());
+        let v = AnyString::Cache(Cachestr::from(value.as_ref()));
+        self._append(k, v)
+    }
 }
 
 #[derive(Default)]
@@ -137,12 +177,29 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
+    #[inline]
     pub fn headers(&mut self) -> &mut HeadersContext {
         &mut self.headers
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.headers.reset();
+    }
+}
+
+#[derive(Default)]
+pub struct ResponseContext {
+    pub(crate) headers: HeadersContext,
+}
+
+impl ResponseContext {
+    #[inline]
+    pub fn headers(&mut self) -> &mut HeadersContext {
+        &mut self.headers
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.headers.reset()
     }
 }
 
@@ -152,7 +209,8 @@ pub struct HttpContext {
     pub(crate) client_addr: SocketAddr,
     pub(crate) upstream: Option<Arc<UpstreamKey>>,
     pub(crate) pipelines: (usize, SmallVec<[Arc<dyn HttpPipeline>; 8]>),
-    pub(crate) reqctx: RequestContext,
+    pub(crate) request_ctx: RequestContext,
+    pub(crate) response_ctx: ResponseContext,
 }
 
 impl HttpContext {
@@ -176,7 +234,12 @@ impl HttpContext {
 
     #[inline]
     pub fn request(&mut self) -> &mut RequestContext {
-        &mut self.reqctx
+        &mut self.request_ctx
+    }
+
+    #[inline]
+    pub fn response(&mut self) -> &mut ResponseContext {
+        &mut self.response_ctx
     }
 
     #[inline]
@@ -210,7 +273,8 @@ impl HttpContext {
 
     #[inline]
     pub(crate) fn reset(&mut self) {
-        self.reqctx.reset();
+        self.request_ctx.reset();
+        self.response_ctx.reset();
         self.pipelines.0 = 0;
         self.upstream.take();
         self.flags = HttpContextFlags::default();

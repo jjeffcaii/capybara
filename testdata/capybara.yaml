@@ -1,0 +1,10 @@
+listeners:
+  httpbin:
+    listen: 127.0.0.1:15006
+    protocol:
+      name: http
+      props:
+    pipelines:
+      - name: capybara.pipelines.http.router
+        props:
+          fallback: https://httpbin.org

@@ -68,7 +68,7 @@ impl StreamContext {
         self.upstream.replace(upstream);
     }
 
-    pub(crate) fn reset_pipeline(&mut self) -> Option<Arc<dyn StreamPipeline>> {
+    pub(crate) fn pipeline(&mut self) -> Option<Arc<dyn StreamPipeline>> {
         if let Some(first) = self.pipelines.1.first() {
             self.pipelines.0 = 1;
             return Some(Clone::clone(first));

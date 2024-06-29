@@ -6,7 +6,7 @@ use capybara_core::proto::{Listener, Signal};
 use capybara_core::protocol::http::HttpListener;
 
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn init() {
     pretty_env_logger::try_init_timed().ok();
@@ -22,8 +22,8 @@ async fn main() -> anyhow::Result<()> {
     let c: PipelineConf = {
         // language=yaml
         let yaml = r#"
-        routes:
-        - route: http://httpbin.org
+         routes:
+         - route: http://httpbin.org
         "#;
         serde_yaml::from_str(yaml).unwrap()
     };
@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     // Test request when server is started:
     //   1. proxypass httpbin.org: curl -i http://127.0.0.1:15006/anything
     let l = HttpListener::builder("127.0.0.1:15006".parse()?)
-        .id("httpbin")
+        .id("httpbin-example")
         .pipeline("capybara.pipelines.http.router", &c)
         .build()?;
 

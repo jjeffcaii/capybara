@@ -1,5 +1,6 @@
 target/
 Cargo.lock
+.clippy.toml
 .linelint.yml
 rustfmt.toml
 .pre-commit-config.yaml
@@ -7,3 +8,5 @@ Dockerfile*
 cliff.toml
 *.md
 LICENSE
+testdata/
+

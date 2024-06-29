@@ -11,7 +11,11 @@ use tokio::sync::Notify;
 
 use crate::cmd::{CommandRun, Executable};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod cmd;
+mod config;
 
 #[derive(Parser)]
 #[command(name = "Capybara")]
@@ -32,8 +36,14 @@ enum Commands {
     },
 }
 
+fn init() {
+    pretty_env_logger::try_init_timed().ok();
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init();
+
     let cli = Cli::parse();
 
     let shutdown = Arc::new(Notify::new());
@@ -41,6 +51,8 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Run { config } => {
+            capybara_core::setup().await;
+
             let c = CommandRun::new(config);
             let shutdown = Clone::clone(&shutdown);
             let stopped = Clone::clone(&stopped);
@@ -58,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
         _ = stopped.notified() => (),
         _ = tokio::signal::ctrl_c() => {
             info!("received signal ctrl-c, wait for graceful shutdown...");
+            shutdown.notify_waiters();
             stopped.notified().await;
         }
     }

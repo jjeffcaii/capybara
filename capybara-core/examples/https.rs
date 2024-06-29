@@ -7,7 +7,7 @@ use capybara_core::protocol::http::HttpListener;
 use capybara_core::transport::TlsAcceptorBuilder;
 
 #[global_allocator]
-static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 async fn init() {
     pretty_env_logger::try_init_timed().ok();
@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Test request when server is started, open link 'https://localhost:8443/' in your web browser
     let l = HttpListener::builder("127.0.0.1:8443".parse()?)
-        .id("https-server-example")
+        .id("https-example")
         .tls(tls_acceptor)
         .pipeline("capybara.pipelines.http.router", &c)
         .build()?;

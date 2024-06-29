@@ -17,9 +17,10 @@ impl HttpPipeline for NoopHttpPipeline {
         ctx: &mut HttpContext,
         request_line: &mut RequestLine,
     ) -> Result<()> {
-        let path = request_line.path();
-
-        info!("#{}: path={}", self.id, &path);
+        if log_enabled!(log::Level::Debug) {
+            let path = request_line.path();
+            debug!("#{}: path={}", self.id, &path);
+        }
 
         match ctx.next() {
             None => Ok(()),
@@ -50,12 +51,14 @@ impl TryFrom<&PipelineConf> for NoopHttpPipelineFactory {
     type Error = anyhow::Error;
 
     fn try_from(value: &PipelineConf) -> std::result::Result<Self, Self::Error> {
-        if let Some(v) = value.get("id") {
+        const KEY_ID: &str = "id";
+
+        if let Some(v) = value.get(KEY_ID) {
             if let Some(id) = v.as_u64() {
                 return Ok(Self { id });
             }
         }
 
-        bail!(CapybaraError::InvalidConfig("id".into()))
+        bail!(CapybaraError::InvalidConfig(KEY_ID.into()))
     }
 }

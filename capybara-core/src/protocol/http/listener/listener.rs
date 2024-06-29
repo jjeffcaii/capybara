@@ -14,12 +14,15 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::FramedRead;
 
 use crate::cachestr::Cachestr;
-use crate::pipeline::http::{load, HeaderOperator, HttpContextFlags, HttpPipelineFactoryExt};
+use crate::pipeline::http::{
+    load, AnyString, HeaderOperator, HeadersContext, HttpContextFlags, HttpPipelineFactoryExt,
+};
 use crate::pipeline::{HttpContext, PipelineConf};
 use crate::proto::{Listener, Signal, Signals, UpstreamKey};
 use crate::protocol::http::codec::Flags;
 use crate::protocol::http::{
     misc, Headers, HttpCodec, HttpField, HttpFrame, RequestLine, Response, ResponseFlags,
+    StatusLine,
 };
 use crate::transport::tcp;
 use crate::upstream::{Pool, Upstreams};
@@ -179,8 +182,6 @@ impl Listener for HttpListener {
                             }
                         }
                     }
-
-
                 }
             }
         }
@@ -190,6 +191,12 @@ impl Listener for HttpListener {
 struct Handshake {
     request_line: RequestLine,
     request_headers: Headers,
+    status: Status,
+}
+
+enum Status {
+    Close,
+    KeepAlive,
 }
 
 struct Handler<S> {
@@ -207,6 +214,7 @@ impl<S> Handler<S>
 where
     S: AsyncWrite + AsyncRead + Sync + Send + 'static,
 {
+    #[inline]
     fn new(ctx: HttpContext, stream: S, closer: Arc<Notify>, upstreams: Upstreams) -> Self {
         let (rh, wh) = tokio::io::split(stream);
 
@@ -227,6 +235,98 @@ where
     }
 
     #[inline]
+    async fn write_headers<W>(
+        w: &mut W,
+        headers: Headers,
+        hc: &mut HeadersContext,
+        deny_headers: &mut roaring::RoaringBitmap,
+    ) -> Result<()>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
+        if hc.is_empty() {
+            return Ok(());
+        }
+
+        let extra_headers: Option<Bytes> = {
+            let mut bu = Headers::builder();
+            for (name, operators) in hc.inner.iter() {
+                for op in operators.iter() {
+                    match op {
+                        HeaderOperator::Drop => {
+                            for pos in headers.positions(name.as_ref()) {
+                                deny_headers.insert(pos as u32);
+                            }
+                        }
+                        HeaderOperator::Add(val) => {
+                            bu = bu.put(name.as_ref(), val.as_ref());
+                        }
+                    }
+                }
+            }
+
+            if bu.is_empty() {
+                None
+            } else {
+                Some(bu.build().into())
+            }
+        };
+
+        if let Some(mut extra_headers) = extra_headers {
+            w.write_all_buf(&mut extra_headers).await?;
+        }
+
+        // 1. no blacklist headers
+        if deny_headers.is_empty() {
+            let mut b: Bytes = headers.into();
+            w.write_all_buf(&mut b).await?;
+            return Ok(());
+        }
+
+        // 2. deny blacklist headers
+        let length = headers.len();
+        for (i, mut b) in headers.into_iter().enumerate() {
+            if !deny_headers.contains(i as u32) {
+                w.write_all_buf(&mut b).await?;
+            }
+        }
+
+        w.write_all(misc::CRLF).await?;
+        w.flush().await?;
+
+        deny_headers.clear();
+
+        Ok(())
+    }
+
+    #[inline]
+    async fn write_response_half(
+        &mut self,
+        status_line: StatusLine,
+        headers: Headers,
+    ) -> Result<()> {
+        {
+            let mut b: Bytes = status_line.into();
+            self.downstream.1.write_all_buf(&mut b).await?;
+        }
+
+        self.ctx.response().headers()._replace(
+            HttpField::Server.into(),
+            AnyString::Arc(Clone::clone(&misc::SERVER)),
+        );
+
+        Self::write_headers(
+            &mut self.downstream.1,
+            headers,
+            self.ctx.response().headers(),
+            &mut self.deny_headers,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    #[inline]
     async fn write_request_half<W>(
         &mut self,
         w: &mut W,
@@ -236,55 +336,18 @@ where
     where
         W: AsyncWriteExt + Unpin,
     {
-        let mut b: Bytes = request_line.into();
-        w.write_all_buf(&mut b).await?;
-
-        let mut bu = Headers::builder();
         {
-            let h = self.ctx.request().headers();
-            if !h.is_empty() {
-                for (name, operators) in h.inner.iter() {
-                    for op in operators.iter() {
-                        match op {
-                            HeaderOperator::Drop => {
-                                for pos in headers.positions(name.as_ref()) {
-                                    self.deny_headers.insert(pos as u32);
-                                }
-                            }
-                            HeaderOperator::Add(val) => {
-                                bu = bu.put(name.as_ref(), val.as_ref());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if !bu.is_empty() {
-            let mut extra_headers: Bytes = bu.build().into();
-            w.write_all_buf(&mut extra_headers).await?;
-        }
-
-        // 1. no blacklist headers
-        if self.deny_headers.is_empty() {
-            let mut b: Bytes = headers.into();
+            let mut b: Bytes = request_line.into();
             w.write_all_buf(&mut b).await?;
-            return Ok(());
         }
 
-        // 2. deny blacklist headers
-        let length = headers.len();
-        for (i, mut b) in headers.into_iter().enumerate() {
-            if !self.deny_headers.contains(i as u32) {
-                w.write_all_buf(&mut b).await?;
-            }
-        }
-
-        w.write_all(misc::CRLF).await?;
-
-        self.deny_headers.clear();
-
-        w.flush().await?;
+        Self::write_headers(
+            w,
+            headers,
+            self.ctx.request().headers(),
+            &mut self.deny_headers,
+        )
+        .await?;
 
         Ok(())
     }
@@ -356,6 +419,23 @@ where
                                 .await?;
                         }
 
+                        let status = {
+                            let connection = headers.get_by_field(HttpField::Connection);
+                            if request_line.nohttp11() {
+                                match connection {
+                                    Some(v) if v.eq_ignore_ascii_case(b"keep-alive") => {
+                                        Status::KeepAlive
+                                    }
+                                    _ => Status::Close,
+                                }
+                            } else {
+                                match connection {
+                                    Some(v) if v.eq_ignore_ascii_case(b"close") => Status::Close,
+                                    _ => Status::KeepAlive,
+                                }
+                            }
+                        };
+
                         if !has_upstream {
                             if let Some(kind) = self.ctx.upstream() {
                                 match &*kind {
@@ -369,6 +449,7 @@ where
                         Ok(Some(Handshake {
                             request_line,
                             request_headers: headers,
+                            status,
                         }))
                     }
                     None => Ok(None),
@@ -402,19 +483,7 @@ where
                         .await?;
                 }
 
-                // write status_line
-                {
-                    let mut b: Bytes = status_line.into();
-                    self.downstream.1.write_all_buf(&mut b).await?;
-                }
-
-                // write response headers
-                {
-                    let mut b: Bytes = headers.into();
-                    self.downstream.1.write_all_buf(&mut b).await?;
-                }
-
-                self.downstream.1.flush().await?;
+                self.write_response_half(status_line, headers).await?;
 
                 loop {
                     match upstream.next().await {
@@ -488,6 +557,7 @@ where
                 Ok(Some(Handshake {
                     request_line,
                     request_headers,
+                    status,
                 })) => match self.ctx.upstream() {
                     Some(uk) => {
                         let pool = self.upstreams.get(uk).await?;
@@ -502,6 +572,10 @@ where
                                 self.transfer(upstream.as_mut(), request_line, request_headers)
                                     .await?
                             }
+                        }
+
+                        if matches!(status, Status::Close) {
+                            break;
                         }
                     }
                     None => {
@@ -521,7 +595,7 @@ where
                     break;
                 }
                 Err(e) => {
-                    error!("http handshake failed: {:?}", e);
+                    error!("http handshake failed: {}", e);
                     // TODO: cleanup
                     break;
                 }

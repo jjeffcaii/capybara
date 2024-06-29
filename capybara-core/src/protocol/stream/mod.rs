@@ -178,7 +178,7 @@ impl Handler {
     }
 
     async fn handle(&mut self, _closer: Arc<Notify>) -> anyhow::Result<()> {
-        if let Some(p) = self.ctx.reset_pipeline() {
+        if let Some(p) = self.ctx.pipeline() {
             p.handle_connect(&mut self.ctx).await?;
         }
 

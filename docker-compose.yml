@@ -1,0 +1,18 @@
+services:
+  server:
+    build: .
+    command:
+      - run
+      - -c
+      - config.yaml
+    working_dir: /app
+    volumes:
+      - ./testdata/capybara.yaml:/app/config.yaml
+    ports:
+      - 15006:15006/tcp
+    networks:
+      - local
+
+networks:
+  local:
+    external: false
