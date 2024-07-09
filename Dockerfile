@@ -5,17 +5,19 @@ COPY . .
 RUN apk add --no-cache musl-dev
 
 RUN cargo build --release && \
-    cp target/capybara /usr/local/cargo/bin/capybara && \
+    cp target/release/capybara /usr/local/cargo/bin/capybara && \
     cargo clean
 
 FROM alpine:3
 
 LABEL maintainer="jjeffcaii@outlook.com"
 
-VOLUME /etc/capybara
+RUN apk --no-cache add ca-certificates tzdata libcap
 
 COPY --from=builder /usr/local/cargo/bin/capybara /usr/local/bin/capybara
 
-RUN setcap cap_net_admin=ep /usr/local/bin/capybara
+RUN setcap 'cap_net_admin+ep,cap_net_bind_service+ep' /usr/local/bin/capybara
+
+VOLUME /etc/capybara
 
 ENTRYPOINT ["capybara"]

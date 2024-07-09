@@ -13,6 +13,7 @@ criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 mimalloc = { version = "0.1", default-features = false }
 
 [dependencies]
+capybara-util = { path = "../capybara-util" }
 log = "0.4"
 slog = "2.7.0"
 slog-async = "2.7.0"
@@ -69,6 +70,7 @@ hickory-resolver = "0.24"
 rustc-hash = { version = "2.0", default-features = false }
 moka = { version = "0.12", features = ["future", "sync"] }
 serde_yaml = "0.9"
+mlua = { version = "0.9", features = ["luajit", "vendored", "serialize", "async", "macros", "send", "parking_lot"] }
 
 [[example]]
 name = "httpbin"

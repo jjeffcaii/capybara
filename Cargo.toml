@@ -7,4 +7,5 @@ resolver = "2"
 members = [
     "capybara",
     "capybara-core",
+    "capybara-util",
 ]

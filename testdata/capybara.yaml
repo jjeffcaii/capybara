@@ -1,6 +1,6 @@
 listeners:
   httpbin:
-    listen: 127.0.0.1:15006
+    listen: 0.0.0.0:15006
     protocol:
       name: http
       props:

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -291,6 +291,12 @@ impl HttpContext {
                 Some(Clone::clone(next))
             }
         }
+    }
+}
+
+impl Default for HttpContext {
+    fn default() -> Self {
+        HttpContext::builder(SocketAddr::new(IpAddr::from([127, 0, 0, 1]), 12345)).build()
     }
 }
 

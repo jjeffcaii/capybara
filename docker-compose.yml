@@ -6,6 +6,10 @@ services:
       - -c
       - config.yaml
     working_dir: /app
+    cap_add:
+      - NET_ADMIN
+    environment:
+      RUST_LOG: 'info'
     volumes:
       - ./testdata/capybara.yaml:/app/config.yaml
     ports:

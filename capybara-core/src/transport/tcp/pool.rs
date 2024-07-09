@@ -197,6 +197,8 @@ impl Manager {
             b.build()?
         };
 
+        info!("connect tcp stream {:?} ok", &stream);
+
         Ok(stream)
     }
 }
@@ -220,7 +222,6 @@ impl managed::Manager for Manager {
 
 #[cfg(test)]
 mod tests {
-    use deadpool::Runtime;
     use futures::stream::StreamExt;
     use tokio::io::AsyncWriteExt;
     use tokio_util::codec::FramedRead;

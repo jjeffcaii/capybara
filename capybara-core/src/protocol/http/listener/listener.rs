@@ -245,6 +245,8 @@ where
         W: AsyncWriteExt + Unpin,
     {
         if hc.is_empty() {
+            let mut b: Bytes = headers.into();
+            w.write_all_buf(&mut b).await?;
             return Ok(());
         }
 

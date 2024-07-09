@@ -196,7 +196,7 @@ mod tls_tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    use crate::resolver::{Resolver, DEFAULT_RESOLVER};
+    use crate::resolver::DEFAULT_RESOLVER;
 
     use super::*;
 

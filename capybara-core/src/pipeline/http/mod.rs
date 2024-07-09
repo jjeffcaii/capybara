@@ -1,12 +1,14 @@
 pub(crate) use noop::NoopHttpPipelineFactory;
 pub(crate) use pipeline::{AnyString, HeaderOperator, HttpContextFlags};
 pub use pipeline::{HeadersContext, HttpContext, HttpPipeline};
+pub(crate) use pipeline_lua::LuaHttpPipelineFactory;
 pub(crate) use pipeline_router::HttpPipelineRouterFactory;
 pub(crate) use registry::{load, HttpPipelineFactoryExt};
 pub use registry::{register, HttpPipelineFactory};
 
 mod noop;
 mod pipeline;
+mod pipeline_lua;
 mod pipeline_router;
 mod registry;
 

@@ -31,6 +31,15 @@ async fn register_http_pipeline() {
             Err(e) => error!("register '{}' occurs an error: {}", name, e),
         }
     }
+
+    {
+        use crate::pipeline::http::LuaHttpPipelineFactory as Factory;
+        let name = "capybara.pipelines.http.lua";
+        match register(name, |c| Factory::try_from(c)).await {
+            Ok(()) => info!("register '{}' ok", name),
+            Err(e) => error!("register '{}' occurs an error: {}", name, e),
+        }
+    }
 }
 
 #[inline(always)]

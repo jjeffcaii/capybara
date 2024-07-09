@@ -77,6 +77,8 @@ fn listen(addr: SocketAddr, buff_size: usize, reuse: bool) -> Result<TcpListener
             if let Err(e) = socket.set_ip_transparent(true) {
                 warn!("failed to set socket {:?} opt IP_TRANSPARENT: {}", &addr, e);
             }
+
+
         }
     }
 
@@ -87,6 +89,7 @@ fn listen(addr: SocketAddr, buff_size: usize, reuse: bool) -> Result<TcpListener
 }
 
 pub struct TcpStreamBuilder {
+    laddr: Option<SocketAddr>,
     addr: SocketAddr,
     timeout: Option<Duration>,
     buff_size: usize,
@@ -98,9 +101,15 @@ impl TcpStreamBuilder {
     pub fn new(addr: SocketAddr) -> Self {
         Self {
             addr,
+            laddr: None,
             timeout: None,
             buff_size: Self::BUFF_SIZE,
         }
+    }
+
+    pub fn local_addr(mut self, addr: SocketAddr) -> Self {
+        self.laddr.replace(addr);
+        self
     }
 
     pub fn buff_size(mut self, buff_size: usize) -> Self {
@@ -118,13 +127,19 @@ impl TcpStreamBuilder {
             addr,
             timeout,
             buff_size,
+            laddr,
         } = self;
-        dial(addr, timeout, buff_size)
+        dial(laddr, addr, timeout, buff_size)
     }
 }
 
 #[inline]
-fn dial(addr: SocketAddr, timeout: Option<Duration>, buff_size: usize) -> Result<TcpStream> {
+fn dial(
+    laddr: Option<SocketAddr>,
+    addr: SocketAddr,
+    timeout: Option<Duration>,
+    buff_size: usize,
+) -> Result<TcpStream> {
     debug!("begin to dial tcp {}", &addr);
 
     let stream = {
@@ -146,6 +161,14 @@ fn dial(addr: SocketAddr, timeout: Option<Duration>, buff_size: usize) -> Result
 
         socket.set_nodelay(true)?;
         socket.set_keepalive(true)?;
+
+        if let Some(laddr) = laddr {
+            // enable reuse when local addr is specified
+            socket.set_reuse_address(true)?;
+            socket.set_reuse_port(true)?;
+            let laddr = SockAddr::from(laddr);
+            socket.bind(&laddr)?;
+        }
 
         match timeout {
             Some(t) => socket.connect_timeout(&addr, t)?,
@@ -210,11 +233,6 @@ pub(crate) fn is_health(conn: &TcpStream) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::BytesMut;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    use crate::resolver::{Resolver, StandardDNSResolver};
-
     use super::*;
 
     const B: &[u8] = b"GET /anything/abc### HTTP/1.1\r\n\
@@ -230,6 +248,11 @@ mod tests {
     #[tokio::test]
     async fn test_tcp_conn() -> anyhow::Result<()> {
         init();
+
+        use bytes::BytesMut;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        use crate::resolver::{Resolver, StandardDNSResolver};
 
         let domain = "httpbin.org";
 
@@ -250,5 +273,32 @@ mod tests {
         info!("response: {:?}", bb);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tcp_stream_connect_with_laddr() {
+        init();
+
+        let to_addr = |s: &str| s.parse::<SocketAddr>().unwrap();
+
+        let laddr = to_addr("0.0.0.0:12345");
+
+        let s1 = {
+            let addr = to_addr("223.5.5.5:53");
+            TcpStreamBuilder::new(addr).local_addr(laddr).build()
+        };
+        assert!(s1.is_ok_and(|s1| {
+            info!("************ connect ok: {:?}", &s1);
+            true
+        }));
+
+        let s2 = {
+            let addr = to_addr("114.114.114.114:53");
+            TcpStreamBuilder::new(addr).local_addr(laddr).build()
+        };
+        assert!(s2.is_ok_and(|s2| {
+            info!("************ connect ok: {:?}", &s2);
+            true
+        }));
     }
 }
