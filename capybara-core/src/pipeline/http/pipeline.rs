@@ -110,12 +110,12 @@ impl HeadersContext {
     }
 
     #[inline]
-    pub(crate) fn _drop(&mut self, header: Cachestr) {
+    pub(crate) fn _remove(&mut self, header: Cachestr) {
         let v = smallvec![HeaderOperator::Drop];
         self.inner.insert(header, v);
     }
 
-    pub fn drop<A>(&mut self, header: A)
+    pub fn remove<A>(&mut self, header: A)
     where
         A: AsRef<str>,
     {
