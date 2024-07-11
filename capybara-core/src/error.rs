@@ -37,8 +37,8 @@ pub enum CapybaraError {
     #[error("invalid connection")]
     InvalidConnection,
 
-    #[error("invalid properties of filter '{0}': {1}")]
-    InvalidFilterConfig(/* property name */ Cow<'static, str>, anyhow::Error),
+    #[error("invalid properties of pipeline '{0}': {1}")]
+    InvalidPipelineConfig(/* property name */ Cow<'static, str>, anyhow::Error),
 
     #[error("invoke filter#{0} failed: {1}")]
     FilterExecutionFailure(/* filter index */ usize, anyhow::Error),

@@ -11,7 +11,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::cachestr::Cachestr;
 use crate::pipeline::misc;
 use crate::proto::UpstreamKey;
-use crate::protocol::http::{Headers, RequestLine, StatusLine};
+use crate::protocol::http::{Headers, Method, RequestLine, StatusLine};
 
 type Pipelines = SmallVec<[Arc<dyn HttpPipeline>; 8]>;
 
@@ -174,12 +174,17 @@ impl HeadersContext {
 #[derive(Default)]
 pub struct RequestContext {
     pub(crate) headers: HeadersContext,
+    pub(crate) method: Option<Method>,
 }
 
 impl RequestContext {
     #[inline]
     pub fn headers(&mut self) -> &mut HeadersContext {
         &mut self.headers
+    }
+
+    pub fn method(&mut self, method: Method) {
+        self.method.replace(method);
     }
 
     pub(crate) fn reset(&mut self) {

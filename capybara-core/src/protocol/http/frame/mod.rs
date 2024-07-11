@@ -2,7 +2,7 @@ pub use body::Body;
 pub use chunked::Chunks;
 pub use header::{Headers, HeadersBuilder};
 pub use query::{Queries, Query};
-pub use request_line::RequestLine;
+pub use request_line::{Method, RequestLine};
 pub use status_line::StatusLine;
 
 mod body;

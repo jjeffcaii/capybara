@@ -3,10 +3,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mlua::prelude::*;
 use mlua::{Function, Lua, UserData, UserDataMethods};
+use serde::Deserialize;
+use serde_yaml::Value;
 use tokio::sync::Mutex;
 
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
-use crate::protocol::http::{Headers, RequestLine, StatusLine};
+use crate::protocol::http::{Headers, Method, RequestLine, StatusLine};
+use crate::CapybaraError;
 
 struct Module;
 
@@ -55,6 +58,15 @@ impl UserData for LuaHttpRequestContext {
             let key = args.0.to_string_lossy();
             let val = args.1.to_string_lossy();
             ctx.request().headers().append(key, val);
+            Ok(())
+        });
+
+        methods.add_method("set_method", |_, this, method: LuaString| {
+            let ctx = unsafe { this.0.as_mut() }.unwrap();
+            let s = method.to_str()?;
+            let m = Method::try_from(s)
+                .map_err(|e| LuaError::ExternalError(Arc::new(CapybaraError::Other(e))))?;
+            ctx.request().method(m);
             Ok(())
         });
     }
@@ -322,13 +334,22 @@ impl HttpPipeline for LuaHttpPipeline {
     }
 }
 
-pub(crate) struct LuaHttpPipelineFactory {}
+#[derive(Deserialize)]
+struct LuaHttpPipelineConfig<'a> {
+    content: &'a str,
+}
+
+pub(crate) struct LuaHttpPipelineFactory {
+    vm: Arc<Mutex<Lua>>,
+}
 
 impl HttpPipelineFactory for LuaHttpPipelineFactory {
     type Item = LuaHttpPipeline;
 
     fn generate(&self) -> anyhow::Result<Self::Item> {
-        todo!()
+        Ok(LuaHttpPipeline {
+            vm: Clone::clone(&self.vm),
+        })
     }
 }
 
@@ -336,7 +357,21 @@ impl TryFrom<&PipelineConf> for LuaHttpPipelineFactory {
     type Error = anyhow::Error;
 
     fn try_from(value: &PipelineConf) -> Result<Self, Self::Error> {
-        todo!()
+        const KEY_CONTENT: &str = "content";
+        match value
+            .get(KEY_CONTENT)
+            .ok_or_else(|| CapybaraError::InvalidConfig(KEY_CONTENT.into()))?
+        {
+            Value::String(s) => {
+                let vm = {
+                    let vm = Lua::new();
+                    vm.load(s).exec()?;
+                    Arc::new(Mutex::new(vm))
+                };
+                Ok(Self { vm })
+            }
+            _ => bail!(CapybaraError::InvalidConfig(KEY_CONTENT.into())),
+        }
     }
 }
 
@@ -348,7 +383,7 @@ mod tests {
     use mlua::Lua;
     use tokio::sync::Mutex;
 
-    use crate::pipeline::http::pipeline_lua::{LuaHttpPipeline, Module};
+    use crate::pipeline::http::pipeline_lua::LuaHttpPipeline;
     use crate::pipeline::{HttpContext, HttpPipeline};
     use crate::protocol::http::{Headers, RequestLine, StatusLine};
 

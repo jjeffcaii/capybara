@@ -28,11 +28,23 @@ async fn main() -> anyhow::Result<()> {
         serde_yaml::from_str(yaml).unwrap()
     };
 
+    let c2: PipelineConf = {
+        // language=yaml
+        let yaml = r#"
+        content: |
+          function handle_status_line(ctx,status_line)
+            ctx:replace_header('X-Powered-By','capybara')
+          end
+        "#;
+        serde_yaml::from_str(yaml).unwrap()
+    };
+
     // Test request when server is started:
     //   1. proxypass httpbin.org: curl -i http://127.0.0.1:15006/anything
     let l = HttpListener::builder("127.0.0.1:15006".parse()?)
         .id("httpbin-example")
         .pipeline("capybara.pipelines.http.router", &c)
+        .pipeline("capybara.pipelines.http.lua", &c2)
         .build()?;
 
     tokio::spawn(async move {

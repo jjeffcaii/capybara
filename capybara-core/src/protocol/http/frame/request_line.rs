@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -27,6 +28,14 @@ pub enum Method {
     POST,
     PUT,
     TRACE,
+}
+
+impl FromStr for Method {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        TryFrom::try_from(s)
+    }
 }
 
 impl TryFrom<&str> for Method {
