@@ -31,6 +31,8 @@ pub mod cachestr {
 
 mod builtin;
 mod error;
+mod logger;
+mod macros;
 pub mod pipeline;
 pub mod proto;
 pub mod protocol;

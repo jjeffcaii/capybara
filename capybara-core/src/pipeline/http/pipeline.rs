@@ -11,9 +11,21 @@ use smallvec::{smallvec, SmallVec};
 use crate::cachestr::Cachestr;
 use crate::pipeline::misc;
 use crate::proto::UpstreamKey;
-use crate::protocol::http::{Headers, Method, RequestLine, StatusLine};
+use crate::protocol::http::{Headers, Method, RequestLine, Response, StatusLine};
 
 type Pipelines = SmallVec<[Arc<dyn HttpPipeline>; 8]>;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HttpPipelineFlags(u32);
+
+bitflags! {
+    impl HttpPipelineFlags: u32 {
+        const READ_REQUEST_ALL = 1 << 0;
+        const WRITE_REQUEST_ALL = 1 << 1;
+        const READ_RESPONSE_ALL = 1 << 2;
+        const WRITE_RESPONSE_ALL = 1 << 3;
+    }
+}
 
 pub(crate) struct HttpContextBuilder {
     client_addr: SocketAddr,
@@ -55,6 +67,7 @@ impl HttpContextBuilder {
             upstream: None,
             request_ctx: Default::default(),
             response_ctx: Default::default(),
+            immediate_response: None,
         }
     }
 }
@@ -216,6 +229,7 @@ pub struct HttpContext {
     pub(crate) pipelines: (usize, SmallVec<[Arc<dyn HttpPipeline>; 8]>),
     pub(crate) request_ctx: RequestContext,
     pub(crate) response_ctx: ResponseContext,
+    pub(crate) immediate_response: Option<Response>,
 }
 
 impl HttpContext {
@@ -245,6 +259,10 @@ impl HttpContext {
     #[inline]
     pub fn response(&mut self) -> &mut ResponseContext {
         &mut self.response_ctx
+    }
+
+    pub fn respond(&mut self, response: Response) {
+        self.immediate_response.replace(response);
     }
 
     #[inline]
@@ -282,6 +300,7 @@ impl HttpContext {
         self.response_ctx.reset();
         self.pipelines.0 = 0;
         self.upstream.take();
+        self.immediate_response.take();
         self.flags = HttpContextFlags::default();
     }
 
@@ -307,6 +326,10 @@ impl Default for HttpContext {
 
 #[async_trait::async_trait]
 pub trait HttpPipeline: Send + Sync + 'static {
+    fn flags(&self) -> HttpPipelineFlags {
+        Default::default()
+    }
+
     async fn initialize(&self) -> Result<()> {
         Ok(())
     }

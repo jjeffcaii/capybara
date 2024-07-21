@@ -1,30 +1,93 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bitflags::bitflags;
+use hashbrown::HashMap;
 use mlua::prelude::*;
 use mlua::{Function, Lua, UserData, UserDataMethods};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use tokio::sync::Mutex;
 
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
-use crate::protocol::http::{Headers, Method, RequestLine, StatusLine};
+use crate::proto::UpstreamKey;
+use crate::protocol::http::{Headers, Method, RequestLine, Response, StatusLine};
 use crate::CapybaraError;
 
-struct Module;
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LuaHttpPipelineFlags(u32);
 
-impl UserData for Module {
+bitflags! {
+    impl LuaHttpPipelineFlags: u32 {
+        const HANDLE_REQUEST_LINE = 1 << 0;
+        const HANDLE_REQUEST_HEADERS = 1 << 1;
+        const HANDLE_STATUS_LINE = 1 << 2;
+        const HANDLE_RESPONSE_HEADERS = 1 << 3;
+    }
+}
+
+struct LuaJsonModule;
+
+impl UserData for LuaJsonModule {
     fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
-        methods.add_method("urldecode", |lua, this, value: LuaString| {
+        methods.add_method("encode", |lua, _, value: mlua::Value| {
+            let mut b = smallvec::SmallVec::<[u8; 512]>::new();
+            serde_json::to_writer(&mut b, &value).map_err(mlua::Error::external)?;
+            lua.create_string(&b[..])
+        });
+        methods.add_method("decode", |lua, _, input: LuaString| {
+            let s = input.to_str()?;
+            let v = serde_json::from_str::<serde_json::Value>(s).map_err(mlua::Error::external)?;
+            lua.to_value(&v)
+        });
+    }
+}
+
+struct LuaUrlEncodingModule;
+
+impl UserData for LuaUrlEncodingModule {
+    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+        methods.add_method("decode", |lua, this, value: LuaString| {
             let b = urlencoding::decode_binary(value.as_bytes());
             lua.create_string(b)
         });
-        methods.add_method("urlencode", |lua, this, value: LuaString| {
+        methods.add_method("encode", |lua, _, value: LuaString| {
             let b = value.as_bytes();
             let encoded = urlencoding::encode_binary(b);
             lua.create_string(encoded.as_bytes())
         });
     }
+}
+
+struct LuaLogger;
+
+impl UserData for LuaLogger {
+    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+        methods.add_method("debug", |lua, this, message: LuaString| {
+            debug!("{}", message.to_string_lossy());
+            Ok(())
+        });
+        methods.add_method("info", |lua, this, message: LuaString| {
+            info!("{}", message.to_string_lossy());
+            Ok(())
+        });
+        methods.add_method("warn", |lua, this, message: LuaString| {
+            warn!("{}", message.to_string_lossy());
+            Ok(())
+        });
+        methods.add_method("error", |lua, this, message: LuaString| {
+            error!("{}", message.to_string_lossy());
+            Ok(())
+        });
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct LuaResponse {
+    status: Option<u16>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    body: Option<String>,
 }
 
 struct LuaHttpRequestContext(*mut HttpContext);
@@ -63,10 +126,49 @@ impl UserData for LuaHttpRequestContext {
 
         methods.add_method("set_method", |_, this, method: LuaString| {
             let ctx = unsafe { this.0.as_mut() }.unwrap();
-            let s = method.to_str()?;
-            let m = Method::try_from(s)
-                .map_err(|e| LuaError::ExternalError(Arc::new(CapybaraError::Other(e))))?;
-            ctx.request().method(m);
+            let method = {
+                let s = method.to_str()?;
+                s.parse::<Method>().map_err(LuaError::external)?
+            };
+            ctx.request().method(method);
+            Ok(())
+        });
+
+        methods.add_method("set_upstream", |_, this, route: LuaString| {
+            let ctx = unsafe { this.0.as_mut() }.unwrap();
+            let uk = {
+                let s = route.to_str()?;
+                s.parse::<UpstreamKey>().map_err(LuaError::external)?
+            };
+            ctx.set_upstream(uk);
+            Ok(())
+        });
+
+        methods.add_method("respond", |lua, this, arg: mlua::Value| {
+            let ctx = unsafe { this.0.as_mut() }.unwrap();
+            let respond = {
+                let LuaResponse {
+                    status,
+                    headers,
+                    body,
+                } = lua.from_value::<LuaResponse>(arg)?;
+                let mut b = Response::builder();
+                if let Some(status) = status {
+                    b = b.status_code(status);
+                }
+                for (k, v) in headers {
+                    b = b.header(k, v);
+                }
+
+                if let Some(body) = body {
+                    b = b.body(&body[..]);
+                }
+
+                b.build()
+            };
+
+            ctx.respond(respond);
+
             Ok(())
         });
     }
@@ -225,6 +327,7 @@ impl UserData for LuaHeaders {
 
 pub(crate) struct LuaHttpPipeline {
     vm: Arc<Mutex<Lua>>,
+    flags: LuaHttpPipelineFlags,
 }
 
 #[async_trait]
@@ -237,7 +340,6 @@ impl HttpPipeline for LuaHttpPipeline {
         {
             let vm = self.vm.lock().await;
             let globals = vm.globals();
-            globals.set("capybara", vm.create_userdata(Module)?)?;
 
             let handler = globals.get::<_, Function>("handle_request_line");
             if let Ok(fun) = handler {
@@ -264,8 +366,6 @@ impl HttpPipeline for LuaHttpPipeline {
         {
             let vm = self.vm.lock().await;
             let globals = vm.globals();
-            globals.set("capybara", vm.create_userdata(Module)?)?;
-
             let handler = globals.get::<_, Function>("handle_request_headers");
             if let Ok(fun) = handler {
                 vm.scope(|scope| {
@@ -291,8 +391,6 @@ impl HttpPipeline for LuaHttpPipeline {
         {
             let vm = self.vm.lock().await;
             let globals = vm.globals();
-            globals.set("capybara", vm.create_userdata(Module)?)?;
-
             let handler = globals.get::<_, Function>("handle_status_line");
             if let Ok(fun) = handler {
                 vm.scope(|scope| {
@@ -341,6 +439,7 @@ struct LuaHttpPipelineConfig<'a> {
 
 pub(crate) struct LuaHttpPipelineFactory {
     vm: Arc<Mutex<Lua>>,
+    flags: LuaHttpPipelineFlags,
 }
 
 impl HttpPipelineFactory for LuaHttpPipelineFactory {
@@ -349,6 +448,7 @@ impl HttpPipelineFactory for LuaHttpPipelineFactory {
     fn generate(&self) -> anyhow::Result<Self::Item> {
         Ok(LuaHttpPipeline {
             vm: Clone::clone(&self.vm),
+            flags: self.flags,
         })
     }
 }
@@ -363,12 +463,41 @@ impl TryFrom<&PipelineConf> for LuaHttpPipelineFactory {
             .ok_or_else(|| CapybaraError::InvalidConfig(KEY_CONTENT.into()))?
         {
             Value::String(s) => {
-                let vm = {
+                let (vm, flags) = {
                     let vm = Lua::new();
                     vm.load(s).exec()?;
-                    Arc::new(Mutex::new(vm))
+                    let mut flags = LuaHttpPipelineFlags::default();
+
+                    {
+                        let globals = vm.globals();
+
+                        // bind modules
+                        globals.set("json", LuaJsonModule)?;
+                        globals.set("urlencoding", LuaUrlEncodingModule)?;
+                        globals.set("logger", LuaLogger)?;
+
+                        // check functions
+                        if globals.get::<_, Function>("handle_request_line").is_ok() {
+                            flags |= LuaHttpPipelineFlags::HANDLE_REQUEST_LINE;
+                        }
+                        if globals.get::<_, Function>("handle_request_headers").is_ok() {
+                            flags |= LuaHttpPipelineFlags::HANDLE_REQUEST_HEADERS;
+                        }
+                        if globals.get::<_, Function>("handle_status_line").is_ok() {
+                            flags |= LuaHttpPipelineFlags::HANDLE_STATUS_LINE;
+                        }
+                        if globals
+                            .get::<_, Function>("handle_response_headers")
+                            .is_ok()
+                        {
+                            flags |= LuaHttpPipelineFlags::HANDLE_RESPONSE_HEADERS;
+                        }
+                    }
+
+                    (Arc::new(Mutex::new(vm)), flags)
                 };
-                Ok(Self { vm })
+
+                Ok(Self { vm, flags })
             }
             _ => bail!(CapybaraError::InvalidConfig(KEY_CONTENT.into())),
         }
@@ -383,7 +512,7 @@ mod tests {
     use mlua::Lua;
     use tokio::sync::Mutex;
 
-    use crate::pipeline::http::pipeline_lua::LuaHttpPipeline;
+    use crate::pipeline::http::pipeline_lua::{LuaHttpPipeline, LuaHttpPipelineFlags};
     use crate::pipeline::{HttpContext, HttpPipeline};
     use crate::protocol::http::{Headers, RequestLine, StatusLine};
 
@@ -409,8 +538,6 @@ function handle_request_line(ctx,request_line)
   print('method: '..request_line:method())
   print('version: '..request_line:version())
   print('query: '..request_line:query())
-
-  print('urlencode: '..capybara:urlencode('我们'))
 
   cnt = cnt+1
 end
@@ -455,6 +582,7 @@ end
 
         let p = LuaHttpPipeline {
             vm: Clone::clone(&vm),
+            flags: LuaHttpPipelineFlags::all(),
         };
 
         let mut ctx = HttpContext::default();

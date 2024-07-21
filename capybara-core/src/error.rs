@@ -3,6 +3,12 @@ use std::io;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CapybaraError {
+    #[error("invalid HPACK index {0}")]
+    InvalidHPackIndex(u8),
+
+    #[error("invalid huffman code")]
+    InvalidHuffmanCode,
+
     #[error("data store disconnected")]
     Disconnect(#[from] io::Error),
     #[error("invalid header (expected {expected:?}, found {found:?})")]

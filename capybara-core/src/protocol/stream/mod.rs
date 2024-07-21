@@ -218,6 +218,8 @@ impl Handler {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
 
     async fn init() {
@@ -229,23 +231,61 @@ mod tests {
     async fn test_stream_listener() -> anyhow::Result<()> {
         init().await;
 
-        let c: PipelineConf = {
-            // language=yaml
-            let s = r#"
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let closed = Arc::new(Notify::new());
+
+        let addr = "127.0.0.1:9999";
+
+        {
+            let closed = Clone::clone(&closed);
+            let c: PipelineConf = {
+                // language=yaml
+                let s = r#"
             upstream: 'httpbin.org:80'
             "#;
 
-            serde_yaml::from_str(s).unwrap()
-        };
+                serde_yaml::from_str(s).unwrap()
+            };
 
-        let (_tx, mut rx) = tokio::sync::mpsc::channel(1);
+            let l = StreamListener::builder(addr.parse().unwrap())
+                .id("fake-stream-listener")
+                .pipeline("capybara.pipelines.stream.router", &c)
+                .build()?;
 
-        let l = StreamListener::builder("127.0.0.1:9999".parse().unwrap())
-            .id("fake-stream-listener")
-            .pipeline("capybara.pipelines.stream.router", &c)
-            .build()?;
+            tokio::spawn(async move {
+                let _ = l.listen(&mut rx).await;
+                closed.notify_one();
+            });
+        }
 
-        l.listen(&mut rx).await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // establish conn
+        let mut c = TcpStream::connect(addr).await?;
+
+        // write data
+        {
+            // use HTTP/1.0, conn will be closed automatically
+            c.write_all(&b"GET /ip HTTP/1.0\r\nHost: httpbin.org\r\nAccept: *\r\n\r\n"[..])
+                .await?;
+            c.flush().await?;
+        }
+
+        // read data
+        {
+            let mut v = vec![];
+            c.read_to_end(&mut v).await?;
+
+            info!("read: {}", String::from_utf8_lossy(&v[..]));
+
+            assert!(!v.is_empty());
+        }
+
+        // shutdown
+        tx.send(Signal::Shutdown).await?;
+
+        // wait for closed
+        closed.notified().await;
 
         Ok(())
     }

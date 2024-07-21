@@ -131,12 +131,13 @@ impl HttpListener {
 impl Listener for HttpListener {
     async fn listen(&self, signals: &mut Signals) -> Result<()> {
         let l = tcp::TcpListenerBuilder::new(self.addr).build()?;
-
         let mut pipelines = self.build_pipeline_factories()?;
+        info!("listener '{}' is listening on {:?}", &self.id, &self.addr);
 
         loop {
             tokio::select! {
                 signal = signals.recv() => {
+                    info!("listener '{}' got signal {:?}", &self.id, &signal);
                     match signal {
                         None => {
                             info!("listener '{}' is stopping....", &self.id);
@@ -406,6 +407,18 @@ where
                     match &*uk {
                         UpstreamKey::Tls(_, sni) => self.set_request_sni(sni),
                         UpstreamKey::TlsHP(_, _, sni) => self.set_request_sni(sni),
+                        UpstreamKey::TcpHP(host, port) => {
+                            // check if http port
+                            let host = if *port == 80 {
+                                AnyString::Cache(Clone::clone(host))
+                            } else {
+                                AnyString::String(format!("{}:{}", host, port))
+                            };
+                            self.ctx
+                                .request()
+                                .headers()
+                                ._replace(HttpField::Host.into(), host);
+                        }
                         _ => (),
                     }
                 }
@@ -443,6 +456,18 @@ where
                                 match &*kind {
                                     UpstreamKey::Tls(_, sni) => self.set_request_sni(sni),
                                     UpstreamKey::TlsHP(_, _, sni) => self.set_request_sni(sni),
+                                    UpstreamKey::TcpHP(host, port) => {
+                                        // check if http port
+                                        let host = if *port == 80 {
+                                            AnyString::Cache(Clone::clone(host))
+                                        } else {
+                                            AnyString::String(format!("{}:{}", host, port))
+                                        };
+                                        self.ctx
+                                            .request()
+                                            .headers()
+                                            ._replace(HttpField::Host.into(), host);
+                                    }
                                     _ => (),
                                 }
                             }
@@ -560,37 +585,49 @@ where
                     request_line,
                     request_headers,
                     status,
-                })) => match self.ctx.upstream() {
-                    Some(uk) => {
-                        let pool = self.upstreams.get(uk).await?;
-                        match &*pool {
-                            Pool::Tcp(pool) => {
-                                let mut upstream = pool.get().await?;
-                                self.transfer(upstream.as_mut(), request_line, request_headers)
-                                    .await?
-                            }
-                            Pool::Tls(pool) => {
-                                let mut upstream = pool.get().await?;
-                                self.transfer(upstream.as_mut(), request_line, request_headers)
-                                    .await?
-                            }
-                        }
-
+                })) => match self.ctx.immediate_response.take() {
+                    Some(respond) => {
+                        self.exhaust_requests().await?;
+                        respond
+                            .write_to(&mut self.downstream.1, ResponseFlags::default())
+                            .await?;
+                        self.downstream.1.flush().await?;
                         if matches!(status, Status::Close) {
                             break;
                         }
                     }
-                    None => {
-                        self.exhaust_requests().await?;
-                        let resp = Response::builder()
-                            .status_code(502)
-                            .body(include_bytes!("502.html"))
-                            .content_type("text/html")
-                            .build();
-                        resp.write_to(&mut self.downstream.1, ResponseFlags::default())
-                            .await?;
-                        self.downstream.1.flush().await?;
-                    }
+                    None => match self.ctx.upstream() {
+                        Some(uk) => {
+                            let pool = self.upstreams.get(uk).await?;
+                            match &*pool {
+                                Pool::Tcp(pool) => {
+                                    let mut upstream = pool.get().await?;
+                                    self.transfer(upstream.as_mut(), request_line, request_headers)
+                                        .await?
+                                }
+                                Pool::Tls(pool) => {
+                                    let mut upstream = pool.get().await?;
+                                    self.transfer(upstream.as_mut(), request_line, request_headers)
+                                        .await?
+                                }
+                            }
+
+                            if matches!(status, Status::Close) {
+                                break;
+                            }
+                        }
+                        None => {
+                            self.exhaust_requests().await?;
+                            let resp = Response::builder()
+                                .status_code(502)
+                                .body(include_bytes!("502.html"))
+                                .content_type("text/html")
+                                .build();
+                            resp.write_to(&mut self.downstream.1, ResponseFlags::default())
+                                .await?;
+                            self.downstream.1.flush().await?;
+                        }
+                    },
                 },
                 Ok(None) => {
                     debug!("outbound connection has no more data");
@@ -622,7 +659,12 @@ where
 mod tests {
     use crate::pipeline::PipelineConf;
     use crate::proto::{Listener, Signal};
-    use crate::protocol::http::listener::listener::HttpListener;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+    use tokio::sync::Notify;
+
+    use super::*;
 
     async fn init() {
         pretty_env_logger::try_init_timed().ok();
@@ -636,31 +678,47 @@ mod tests {
         use tokio::sync::mpsc;
 
         let (tx, mut rx) = mpsc::channel(1);
+        let closed = Arc::new(Notify::new());
 
-        let c: PipelineConf = {
-            // language=yaml
-            let s = r#"
+        {
+            let c: PipelineConf = {
+                // language=yaml
+                let s = r#"
             routes:
             - route: httpbin.org:80
               matches:
               - location: path
                 match: /anything*
             "#;
-            serde_yaml::from_str(s).unwrap()
-        };
+                serde_yaml::from_str(s).unwrap()
+            };
 
-        let l = HttpListener::builder("127.0.0.1:8080".parse()?)
-            .id("fake-http-listener")
-            .pipeline("capybara.pipelines.http.router", &c)
-            .build()?;
+            let l = HttpListener::builder("127.0.0.1:8080".parse()?)
+                .id("fake-http-listener")
+                .pipeline("capybara.pipelines.http.router", &c)
+                .build()?;
 
-        tokio::spawn(async move {
-            let _ = l.listen(&mut rx).await;
-        });
+            let closed = Clone::clone(&closed);
 
-        let _ = tokio::signal::ctrl_c().await;
+            tokio::spawn(async move {
+                let _ = l.listen(&mut rx).await;
+                closed.notify_one();
+            });
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        let mut c = TcpStream::connect("127.0.0.1:8080").await?;
+        c.write_all(&b"GET /anything HTTP/1.1\r\nHost: httpbin.org\r\nAccept: *\r\nConnection: close\r\n\r\n"[..]).await?;
+        c.flush().await?;
+
+        let mut v = vec![];
+        c.read_to_end(&mut v).await?;
+        info!("response: {}", String::from_utf8_lossy(&v[..]));
 
         let _ = tx.send(Signal::Shutdown).await;
+
+        closed.notified().await;
 
         Ok(())
     }

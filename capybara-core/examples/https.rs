@@ -6,9 +6,6 @@ use capybara_core::proto::{Listener, Signal};
 use capybara_core::protocol::http::HttpListener;
 use capybara_core::transport::TlsAcceptorBuilder;
 
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 async fn init() {
     pretty_env_logger::try_init_timed().ok();
     capybara_core::setup().await;
