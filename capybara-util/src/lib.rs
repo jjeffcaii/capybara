@@ -4,6 +4,7 @@ use once_cell::sync::Lazy;
 
 pub use ifaddrs::IfAddrs;
 pub use rotate::{FileRotate, RotationMode};
+pub use weighted::{WeightedResource, WeightedResourceBuilder};
 
 static IP: Lazy<Option<IpAddr>> = Lazy::new(|| {
     if let Ok(addrs) = IfAddrs::get() {
@@ -25,6 +26,7 @@ pub fn local_addr() -> Option<IpAddr> {
 
 mod ifaddrs;
 mod rotate;
+mod weighted;
 
 #[cfg(test)]
 mod tests {

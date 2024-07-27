@@ -100,6 +100,10 @@ impl StreamListener {
 
 #[async_trait]
 impl Listener for StreamListener {
+    fn id(&self) -> &str {
+        self.id.as_ref()
+    }
+
     async fn listen(&self, signals: &mut Signals) -> crate::Result<()> {
         let l = TcpListenerBuilder::new(self.addr).build()?;
 

@@ -1,10 +1,8 @@
-listeners:
-  httpbin:
-    listen: 0.0.0.0:15006
-    protocol:
-      name: http
-      props:
-    pipelines:
-      - name: capybara.pipelines.http.router
-        props:
-          fallback: https://httpbin.org
+loggers:
+  main:
+    path: ~/capybara/logs/main.log
+
+providers:
+  - kind: static_file
+    props:
+      path: ./testdata/config.yaml

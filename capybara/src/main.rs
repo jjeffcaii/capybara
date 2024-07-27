@@ -1,3 +1,16 @@
+#![allow(dead_code)]
+// #![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::from_over_into)]
+#![allow(clippy::module_inception)]
+#![allow(clippy::upper_case_acronyms)]
+#![doc(test(
+    no_crate_inject,
+    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
+))]
+
 #[macro_use]
 extern crate anyhow;
 #[macro_use]
@@ -14,8 +27,10 @@ use crate::cmd::{CommandRun, Executable};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod bootstrap;
 mod cmd;
 mod config;
+mod provider;
 
 #[derive(Parser)]
 #[command(name = "Capybara")]

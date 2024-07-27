@@ -129,6 +129,10 @@ impl HttpListener {
 
 #[async_trait]
 impl Listener for HttpListener {
+    fn id(&self) -> &str {
+        self.id.as_ref()
+    }
+
     async fn listen(&self, signals: &mut Signals) -> Result<()> {
         let l = tcp::TcpListenerBuilder::new(self.addr).build()?;
         let mut pipelines = self.build_pipeline_factories()?;
@@ -657,12 +661,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::pipeline::PipelineConf;
-    use crate::proto::{Listener, Signal};
     use std::sync::Arc;
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
     use tokio::sync::Notify;
+
+    use crate::pipeline::PipelineConf;
+    use crate::proto::{Listener, Signal};
 
     use super::*;
 

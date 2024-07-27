@@ -31,6 +31,9 @@ pub enum CapybaraError {
     #[error("invalid route")]
     InvalidRoute,
 
+    #[error("invalid upstream pool")]
+    InvalidUpstreamPool,
+
     #[error("malformed http packet: {0}")]
     MalformedHttpPacket(/* reason */ Cow<'static, str>),
 

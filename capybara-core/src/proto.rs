@@ -127,6 +127,7 @@ pub type Signals = tokio::sync::mpsc::Receiver<Signal>;
 
 #[async_trait]
 pub trait Listener: Send + Sync + 'static {
+    fn id(&self) -> &str;
     async fn listen(&self, signals: &mut Signals) -> Result<()>;
 }
 
