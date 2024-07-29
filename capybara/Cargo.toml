@@ -6,10 +6,10 @@ edition = "2021"
 [dev-dependencies]
 pretty_env_logger = "0.5.0"
 
-[dependencies.capybara-core]
-path = "../capybara-core"
-
 [dependencies]
+capybara-core = { path = "../capybara-core" }
+capybara-etc = { path = "../capybara-etc" }
+capybara-util = { path = "../capybara-util" }
 mimalloc = { version = "0.1.42", default-features = false }
 log = "0.4.21"
 anyhow = "1.0.86"

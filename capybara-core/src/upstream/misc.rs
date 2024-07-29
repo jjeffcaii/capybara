@@ -58,6 +58,9 @@ pub(crate) async fn establish(upstream: &UpstreamKey, buff_size: usize) -> Resul
             let stream = c.connect(Clone::clone(sni), stream).await?;
             ClientStream::Tls(stream)
         }
+        UpstreamKey::Tag(tag) => {
+            todo!("establish with tag is not supported yet")
+        }
     };
 
     debug!("establish {} ok: {}", upstream, &stream);

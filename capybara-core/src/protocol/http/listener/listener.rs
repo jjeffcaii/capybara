@@ -25,7 +25,7 @@ use crate::protocol::http::{
     StatusLine,
 };
 use crate::transport::tcp;
-use crate::upstream::{Pool, Upstreams};
+use crate::upstream::{Pool, Pools, Upstreams};
 use crate::Result;
 
 pub struct HttpListenerBuilder {
@@ -33,6 +33,7 @@ pub struct HttpListenerBuilder {
     tls: Option<TlsAcceptor>,
     id: Option<Cachestr>,
     pipelines: Vec<(Cachestr, PipelineConf)>,
+    upstreams: Vec<(Cachestr, Arc<dyn Pools>)>,
 }
 
 impl HttpListenerBuilder {
@@ -58,24 +59,36 @@ impl HttpListenerBuilder {
         self
     }
 
+    pub fn upstream<K>(mut self, key: K, pools: Arc<dyn Pools>) -> Self
+    where
+        K: AsRef<str>,
+    {
+        self.upstreams.push((Cachestr::from(key.as_ref()), pools));
+        self
+    }
+
     pub fn build(self) -> Result<HttpListener> {
         let Self {
             addr,
             id,
             pipelines,
             tls,
+            upstreams,
         } = self;
 
         let closer = Arc::new(Notify::new());
 
-        let upstreams = Upstreams::builder(Clone::clone(&closer)).build();
+        let mut ub = Upstreams::builder(Clone::clone(&closer));
+        for (k, v) in upstreams {
+            ub = ub.keyed(k, v);
+        }
 
         Ok(HttpListener {
             id: id.unwrap_or_else(|| Cachestr::from(uuid::Uuid::new_v4().to_string())),
             tls,
             addr,
             pipelines: ArcSwap::from_pointee(pipelines),
-            upstreams,
+            upstreams: ub.build(),
             closer,
         })
     }
@@ -97,6 +110,7 @@ impl HttpListener {
             id: None,
             tls: None,
             pipelines: Default::default(),
+            upstreams: Default::default(),
         }
     }
 
@@ -602,7 +616,7 @@ where
                     }
                     None => match self.ctx.upstream() {
                         Some(uk) => {
-                            let pool = self.upstreams.get(uk).await?;
+                            let pool = self.upstreams.get(uk, 0).await?;
                             match &*pool {
                                 Pool::Tcp(pool) => {
                                     let mut upstream = pool.get().await?;

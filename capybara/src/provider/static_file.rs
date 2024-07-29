@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::config::Config;
+use capybara_etc::Config;
 
 use super::ConfigProvider;
 

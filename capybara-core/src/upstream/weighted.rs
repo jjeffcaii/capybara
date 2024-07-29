@@ -6,10 +6,9 @@ use capybara_util::WeightedResource;
 
 use crate::{CapybaraError, Result};
 
-use super::pools::Pools;
-use super::upstreams::Pool;
+use super::pools::{Pool, Pools};
 
-struct WeightedPools(WeightedResource<Arc<Pool>>);
+pub struct WeightedPools(WeightedResource<Arc<Pool>>);
 
 #[async_trait]
 impl Pools for WeightedPools {

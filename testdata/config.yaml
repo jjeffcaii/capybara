@@ -8,23 +8,21 @@ listeners:
       - name: capybara.pipelines.http.lua
         props:
           content: |
+            cnts = 0
+
             function handle_request_headers(ctx,headers)
               local u = headers:get('x-upstream-key')
               if u ~= nil and u ~= '' then
                 ctx:set_upstream(u)
               else
-                ctx:respond({
-                  status=502,
-                  headers={
-                    ['Content-Type']='application/json; charset=UTF-8'
-                  },
-                  body=json:encode({err='NO_ROUTE_FOUND',msg='Please set x-upstream-key!'})
-                })
+                ctx:set_upstream('upstream://httpbin')
               end
             end
 
             function handle_status_line(ctx,status_line)
+              cnts = cnts + 1
               ctx:replace_header('X-Powered-By','capybara')
+              ctx:replace_header('X-Capybara-Requests', tostring(cnts))
             end
 
 upstreams:
@@ -35,5 +33,5 @@ upstreams:
     endpoints:
       - addr: httpbin.org:80
         weight: 50
-      - addr: httpbingo.org:80
+      - addr: postman-echo.com:80
         weight: 50

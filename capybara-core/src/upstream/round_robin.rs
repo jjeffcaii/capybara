@@ -8,7 +8,7 @@ use crate::{CapybaraError, Result};
 
 use super::pools::Pools;
 
-struct RoundRobinPools {
+pub struct RoundRobinPools {
     pools: Vec<Arc<Pool>>,
     seq: AtomicU32,
 }

@@ -1,7 +1,7 @@
-#![allow(dead_code)]
+// #![allow(dead_code)]
 // #![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(unused_assignments)]
+// #![allow(unused_variables)]
+// #![allow(unused_assignments)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::from_over_into)]
 #![allow(clippy::module_inception)]
@@ -29,7 +29,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod bootstrap;
 mod cmd;
-mod config;
 mod provider;
 
 #[derive(Parser)]

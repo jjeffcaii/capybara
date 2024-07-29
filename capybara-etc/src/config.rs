@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+pub type Properties = HashMap<String, serde_yaml::Value>;
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Config {
     pub listeners: HashMap<String, ListenerConfig>,
@@ -20,14 +22,14 @@ pub struct ListenerConfig {
 pub struct ProtocolConfig {
     pub name: String,
     #[serde(default)]
-    pub props: capybara_core::pipeline::PipelineConf,
+    pub props: Properties,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct PipelineConfig {
     pub name: String,
     #[serde(default)]
-    pub props: capybara_core::pipeline::PipelineConf,
+    pub props: Properties,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
@@ -86,6 +88,8 @@ pub struct PoolConfig {
 
 #[cfg(test)]
 mod tests {
+    use log::info;
+
     use super::*;
 
     fn init() {

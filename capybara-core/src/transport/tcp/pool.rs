@@ -15,9 +15,9 @@ use crate::transport::Address;
 
 use super::{misc, TcpStreamBuilder};
 
-pub(crate) type Pool = managed::Pool<Manager>;
+pub type Pool = managed::Pool<Manager>;
 
-pub(crate) struct TcpStreamPoolBuilder {
+pub struct TcpStreamPoolBuilder {
     addr: Address,
     max_size: usize,
     timeout: Option<Duration>,
@@ -30,12 +30,12 @@ impl TcpStreamPoolBuilder {
     pub(crate) const BUFF_SIZE: usize = 8192;
     pub(crate) const MAX_SIZE: usize = 128;
 
-    pub(crate) fn with_addr(addr: SocketAddr) -> Self {
+    pub fn with_addr(addr: SocketAddr) -> Self {
         let addr = Address::Direct(addr);
         Self::new(addr)
     }
 
-    pub(crate) fn with_domain<D>(domain: D, port: u16) -> Self
+    pub fn with_domain<D>(domain: D, port: u16) -> Self
     where
         D: AsRef<str>,
     {
@@ -56,32 +56,32 @@ impl TcpStreamPoolBuilder {
         }
     }
 
-    pub(crate) fn max_size(mut self, size: usize) -> Self {
+    pub fn max_size(mut self, size: usize) -> Self {
         self.max_size = size;
         self
     }
 
-    pub(crate) fn timeout(mut self, timeout: Duration) -> Self {
+    pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout.replace(timeout);
         self
     }
 
-    pub(crate) fn buff_size(mut self, buff_size: usize) -> Self {
+    pub fn buff_size(mut self, buff_size: usize) -> Self {
         self.buff_size = buff_size;
         self
     }
 
-    pub(crate) fn idle_time(mut self, lifetime: Duration) -> Self {
+    pub fn idle_time(mut self, lifetime: Duration) -> Self {
         self.idle_time.replace(lifetime);
         self
     }
 
-    pub(crate) fn resolver(mut self, resolver: Arc<dyn Resolver>) -> Self {
+    pub fn resolver(mut self, resolver: Arc<dyn Resolver>) -> Self {
         self.resolver.replace(resolver);
         self
     }
 
-    pub(crate) async fn build(self, closer: Arc<Notify>) -> Result<Pool> {
+    pub async fn build(self, closer: Arc<Notify>) -> Result<Pool> {
         let Self {
             addr,
             max_size,
@@ -171,7 +171,7 @@ impl TcpStreamPoolBuilder {
     }
 }
 
-pub(crate) struct Manager {
+pub struct Manager {
     addr: Address,
     resolver: Arc<dyn Resolver>,
     buff_size: usize,

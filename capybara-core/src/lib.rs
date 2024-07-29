@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// #![allow(unused_imports)]
+#![allow(unused_imports)]
 #![allow(unused_variables)]
 #![allow(unused_assignments)]
 #![allow(clippy::type_complexity)]
@@ -21,6 +21,7 @@ extern crate string_cache;
 
 pub use builtin::setup;
 pub use error::CapybaraError;
+pub use upstream::{Pool, Pools, RoundRobinPools, WeightedPools};
 
 pub type Result<T> = std::result::Result<T, CapybaraError>;
 

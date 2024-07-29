@@ -14,6 +14,7 @@ pub enum UpstreamKey {
     Tls(SocketAddr, ServerName),
     TcpHP(Cachestr, u16),
     TlsHP(Cachestr, u16, ServerName),
+    Tag(Cachestr),
 }
 
 impl FromStr for UpstreamKey {
@@ -50,6 +51,14 @@ impl FromStr for UpstreamKey {
         }
 
         // FIXME: too many duplicated codes
+
+        if let Some(suffix) = s.strip_prefix("upstream://") {
+            return if suffix.is_empty() {
+                Err(CapybaraError::InvalidUpstream(s.to_string().into()))
+            } else {
+                Ok(UpstreamKey::Tag(Cachestr::from(suffix)))
+            };
+        }
 
         if let Some(suffix) = s.strip_prefix("tcp://") {
             let (host, port) = host_and_port(suffix)?;
@@ -113,6 +122,7 @@ impl Display for UpstreamKey {
                 }
                 write!(f, "tls://{}:{}", addr, port)
             }
+            UpstreamKey::Tag(tag) => write!(f, "upstream://{}", tag.as_ref()),
         }
     }
 }
@@ -149,6 +159,7 @@ mod tests {
         init();
 
         for (s, expect) in [
+            ("upstream://some-upstream", "upstream://some-upstream"),
             // ip+port
             ("127.0.0.1:8080", "tcp://127.0.0.1:8080"),
             // host+port

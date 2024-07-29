@@ -19,7 +19,7 @@ use crate::{resolver, CapybaraError};
 
 pub type TlsStream<T> = tokio_rustls::client::TlsStream<T>;
 
-pub(crate) type Pool = managed::Pool<Manager>;
+pub type Pool = managed::Pool<Manager>;
 
 pub(crate) struct TlsStreamPoolBuilder {
     addr: Address,
@@ -203,7 +203,7 @@ fn is_health(stream: &TlsStream<TcpStream>) -> crate::Result<()> {
     tcp::is_health(c)
 }
 
-pub(crate) struct Manager {
+pub struct Manager {
     addr: Address,
     resolver: Arc<dyn Resolver>,
     buff_size: usize,

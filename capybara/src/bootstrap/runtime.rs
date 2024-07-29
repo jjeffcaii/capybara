@@ -1,14 +1,17 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use hashbrown::HashMap;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Notify, RwLock};
 
 use capybara_core::proto::{Listener, Signal};
 use capybara_core::protocol::http::HttpListener;
+use capybara_core::transport::tcp::TcpStreamPoolBuilder;
+use capybara_core::{CapybaraError, Pool, Pools, RoundRobinPools, WeightedPools};
+use capybara_etc::{BalanceStrategy, Config, ListenerConfig, UpstreamConfig};
+use capybara_util::WeightedResource;
 
-use crate::config::{Config, ListenerConfig};
 use crate::provider::{ConfigProvider, StaticFileWatcher};
 
 use super::config::BootstrapConf;
@@ -21,7 +24,9 @@ enum ConfigOperation<T> {
 
 #[derive(Default)]
 struct Dispatcher {
+    closer: Arc<Notify>,
     listeners: HashMap<String, (mpsc::Sender<Signal>, Arc<dyn Listener>)>,
+    upstreams: HashMap<String, Arc<dyn Pools>>,
 }
 
 impl Dispatcher {
@@ -29,6 +34,59 @@ impl Dispatcher {
         for (_, (tx, _)) in &self.listeners {
             tx.send(Signal::Shutdown).await.ok();
         }
+    }
+
+    async fn dispatch_upstream(&mut self, op: ConfigOperation<UpstreamConfig>) {
+        match op {
+            ConfigOperation::Remove(k) => {
+                self.remove_listener(&k).await.ok();
+            }
+            ConfigOperation::Create(k, v) => {
+                self.create_upstream(k, v).await.ok();
+            }
+            ConfigOperation::Update(_k, _v) => {
+                todo!("update listener")
+            }
+        }
+    }
+
+    async fn create_upstream(&mut self, k: String, v: UpstreamConfig) -> anyhow::Result<()> {
+        let p: Arc<dyn Pools> = match v.balancer {
+            BalanceStrategy::Weighted => {
+                let mut b = WeightedResource::builder();
+
+                for endpoint in &v.endpoints {
+                    let weight = endpoint.weight.unwrap_or(10);
+                    let p = {
+                        let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
+                        let p = b.build(Clone::clone(&self.closer)).await?;
+                        Pool::Tcp(p)
+                    };
+                    b = b.push(weight, p.into());
+                }
+                Arc::new(WeightedPools::from(b.build()))
+            }
+            BalanceStrategy::IpHash => {
+                todo!()
+            }
+            BalanceStrategy::RoundRobin => {
+                let mut pools: Vec<Arc<Pool>> = vec![];
+
+                for endpoint in &v.endpoints {
+                    let next = {
+                        let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
+                        let p = b.build(Clone::clone(&self.closer)).await?;
+                        Pool::Tcp(p)
+                    };
+                    pools.push(next.into());
+                }
+                Arc::new(RoundRobinPools::from(pools))
+            }
+        };
+
+        self.upstreams.insert(k, p);
+
+        Ok(())
     }
 
     async fn dispatch_listener(&mut self, op: ConfigOperation<ListenerConfig>) {
@@ -62,6 +120,11 @@ impl Dispatcher {
                 for p in &c.pipelines {
                     b = b.pipeline(&p.name, &p.props);
                 }
+
+                for (k, v) in &self.upstreams {
+                    b = b.upstream(k, Clone::clone(v));
+                }
+
                 Arc::new(b.build()?)
             }
             other => {
@@ -86,6 +149,25 @@ impl Dispatcher {
     }
 }
 
+#[inline]
+fn to_tcp_stream_pool_builder(addr: &str) -> anyhow::Result<TcpStreamPoolBuilder> {
+    let mut sp = addr.split(':');
+    if let Some(left) = sp.next() {
+        if let Some(right) = sp.next() {
+            if let Ok(port) = right.parse::<u16>() {
+                if sp.next().is_none() {
+                    return Ok(match left.parse::<IpAddr>() {
+                        Ok(ip) => TcpStreamPoolBuilder::with_addr(SocketAddr::new(ip, port)),
+                        Err(_) => TcpStreamPoolBuilder::with_domain(left, port),
+                    });
+                }
+            }
+        }
+    }
+
+    bail!(CapybaraError::InvalidUpstream(addr.to_string().into()));
+}
+
 pub(crate) struct Bootstrap {
     bc: BootstrapConf,
     c: Arc<RwLock<Config>>,
@@ -107,6 +189,41 @@ impl Bootstrap {
             tokio::spawn(async move {
                 while let Some(next) = c_rx.recv().await {
                     let mut prev = c.write().await;
+
+                    for k in prev.upstreams.keys() {
+                        if !next.upstreams.contains_key(k) {
+                            let mut d = dispatcher.write().await;
+                            d.dispatch_upstream(ConfigOperation::Remove(Clone::clone(k)))
+                                .await;
+                        }
+                    }
+
+                    // CREATE: $not_exist(prev) && $exit(next)
+                    // UPDATE: $exist(prev) && $exist(next)
+                    for (k, v) in &next.upstreams {
+                        match prev.upstreams.get(k) {
+                            None => {
+                                let op = ConfigOperation::Create(Clone::clone(k), Clone::clone(v));
+                                {
+                                    let mut d = dispatcher.write().await;
+                                    d.dispatch_upstream(op).await;
+                                }
+                                prev.upstreams.insert(Clone::clone(k), Clone::clone(v));
+                            }
+                            Some(exist) if exist != v => {
+                                {
+                                    let mut d = dispatcher.write().await;
+                                    d.dispatch_upstream(ConfigOperation::Update(
+                                        Clone::clone(k),
+                                        Clone::clone(v),
+                                    ))
+                                    .await;
+                                }
+                                prev.upstreams.insert(Clone::clone(k), Clone::clone(v));
+                            }
+                            _ => (),
+                        }
+                    }
 
                     // REMOVE: $exist(prev) && $not_exist(next)
                     for k in prev.listeners.keys() {
