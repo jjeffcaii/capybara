@@ -9,4 +9,4 @@ cliff.toml
 *.md
 LICENSE
 testdata/
-
+.github/

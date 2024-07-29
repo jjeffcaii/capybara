@@ -1,19 +1,21 @@
 services:
   server:
     build: .
+    image: ghcr.io/jjeffcaii/capybara:master
     command:
       - run
       - -c
-      - config.yaml
+      - capybara.yaml
     working_dir: /app
     cap_add:
       - NET_ADMIN
     environment:
       RUST_LOG: 'info'
     volumes:
-      - ./testdata/capybara.yaml:/app/config.yaml
+      - ./testdata/capybara.docker.yaml:/app/capybara.yaml
+      - ./testdata/config.yaml:/app/config.yaml
     ports:
-      - 15006:15006/tcp
+      - "15006:15006/tcp"
     networks:
       - local
 

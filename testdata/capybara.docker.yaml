@@ -1,0 +1,8 @@
+loggers:
+  main:
+    path: ~/capybara/logs/main.log
+
+providers:
+  - kind: static_file
+    props:
+      path: /app/config.yaml
