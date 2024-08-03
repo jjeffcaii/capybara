@@ -3,7 +3,7 @@ use std::str::FromStr;
 use once_cell::sync::Lazy;
 use strum_macros::EnumIter;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
 
 use super::misc::hash16;
 

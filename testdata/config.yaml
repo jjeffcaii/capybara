@@ -31,7 +31,7 @@ upstreams:
     resolver: default
     balancer: round-robin
     endpoints:
-      - addr: httpbin.org:80
+      - addr: httpbin.org:443
         weight: 50
-      - addr: postman-echo.com:80
+      - addr: postman-echo.com:443
         weight: 50

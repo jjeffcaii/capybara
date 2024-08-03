@@ -11,17 +11,17 @@ use rustls::ServerName;
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::resolver::Resolver;
-use crate::transport::Address;
-use crate::transport::{tcp, TlsConnectorBuilder};
+use crate::transport::{tcp, Address, Addressable, TlsConnectorBuilder};
 use crate::{resolver, CapybaraError};
 
 pub type TlsStream<T> = tokio_rustls::client::TlsStream<T>;
 
 pub type Pool = managed::Pool<Manager>;
 
-pub(crate) struct TlsStreamPoolBuilder {
+pub struct TlsStreamPoolBuilder {
     addr: Address,
     max_size: usize,
     timeout: Option<Duration>,
@@ -209,6 +209,12 @@ pub struct Manager {
     buff_size: usize,
     timeout: Option<Duration>,
     sni: ServerName,
+}
+
+impl Addressable for Manager {
+    fn address(&self) -> &Address {
+        &self.addr
+    }
 }
 
 impl managed::Manager for Manager {

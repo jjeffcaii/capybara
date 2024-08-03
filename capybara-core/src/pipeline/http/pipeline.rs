@@ -8,7 +8,8 @@ use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
 use smallvec::{smallvec, SmallVec};
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::pipeline::misc;
 use crate::proto::UpstreamKey;
 use crate::protocol::http::{Headers, Method, RequestLine, Response, StatusLine};
@@ -120,6 +121,15 @@ impl HeadersContext {
 
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+
+    pub fn exist(&self, key: &str) -> bool {
+        let key = Cachestr::from(key);
+        self.inner.contains_key(&key)
+    }
+
+    pub fn _exist(&self, key: Cachestr) -> bool {
+        self.inner.contains_key(&key)
     }
 
     #[inline]

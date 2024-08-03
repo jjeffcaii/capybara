@@ -6,7 +6,8 @@ use hashbrown::HashMap;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::proto::UpstreamKey;
 use crate::resolver::{Resolver, DEFAULT_RESOLVER};
 use crate::transport::{tcp, tls};

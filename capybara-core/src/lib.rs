@@ -17,18 +17,12 @@ extern crate anyhow;
 extern crate cfg_if;
 #[macro_use]
 extern crate log;
-extern crate string_cache;
 
 pub use builtin::setup;
 pub use error::CapybaraError;
 pub use upstream::{Pool, Pools, RoundRobinPools, WeightedPools};
 
 pub type Result<T> = std::result::Result<T, CapybaraError>;
-
-/// cached string
-pub mod cachestr {
-    include!(concat!(env!("OUT_DIR"), "/cachestr.rs"));
-}
 
 mod builtin;
 mod error;

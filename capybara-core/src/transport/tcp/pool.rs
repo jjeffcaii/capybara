@@ -9,9 +9,10 @@ use deadpool::{managed, Runtime};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::resolver::{self, Resolver};
-use crate::transport::Address;
+use crate::transport::{Address, Addressable};
 
 use super::{misc, TcpStreamBuilder};
 
@@ -200,6 +201,12 @@ impl Manager {
         info!("connect tcp stream {:?} ok", &stream);
 
         Ok(stream)
+    }
+}
+
+impl Addressable for Manager {
+    fn address(&self) -> &Address {
+        &self.addr
     }
 }
 

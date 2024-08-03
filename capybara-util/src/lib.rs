@@ -33,6 +33,11 @@ pub fn local_addr() -> Option<IpAddr> {
     Clone::clone(&IP)
 }
 
+/// cached string
+pub mod cachestr {
+    include!(concat!(env!("OUT_DIR"), "/cachestr.rs"));
+}
+
 mod ifaddrs;
 mod rotate;
 mod weighted;

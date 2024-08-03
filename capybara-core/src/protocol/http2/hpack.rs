@@ -7,7 +7,8 @@ use once_cell::sync::Lazy;
 use strum::FromRepr;
 use strum_macros::EnumIter;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::CapybaraError;
 
 static STATIC_TABLE_ENTRIES: Lazy<Vec<Arc<HeaderField>>> = Lazy::new(|| {

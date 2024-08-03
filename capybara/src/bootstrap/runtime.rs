@@ -8,8 +8,9 @@ use tokio::sync::{mpsc, Notify, RwLock};
 use capybara_core::proto::{Listener, Signal};
 use capybara_core::protocol::http::HttpListener;
 use capybara_core::transport::tcp::TcpStreamPoolBuilder;
+use capybara_core::transport::tls::TlsStreamPoolBuilder;
 use capybara_core::{CapybaraError, Pool, Pools, RoundRobinPools, WeightedPools};
-use capybara_etc::{BalanceStrategy, Config, ListenerConfig, UpstreamConfig};
+use capybara_etc::{BalanceStrategy, Config, ListenerConfig, TransportKind, UpstreamConfig};
 use capybara_util::WeightedResource;
 
 use crate::provider::{ConfigProvider, StaticFileWatcher};
@@ -57,11 +58,23 @@ impl Dispatcher {
 
                 for endpoint in &v.endpoints {
                     let weight = endpoint.weight.unwrap_or(10);
-                    let p = {
-                        let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
-                        let p = b.build(Clone::clone(&self.closer)).await?;
-                        Pool::Tcp(p)
+
+                    let p = match endpoint.transport.as_ref().unwrap_or(&v.transport) {
+                        TransportKind::Tcp => {
+                            if endpoint.tls.is_some_and(|it| it) || endpoint.addr.ends_with(":443")
+                            {
+                                let b = to_tls_stream_pool_builder(&endpoint.addr)?;
+                                Pool::Tls(b.build(Clone::clone(&self.closer)).await?)
+                            } else {
+                                let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
+                                Pool::Tcp(b.build(Clone::clone(&self.closer)).await?)
+                            }
+                        }
+                        TransportKind::Udp => {
+                            todo!()
+                        }
                     };
+
                     b = b.push(weight, p.into());
                 }
                 Arc::new(WeightedPools::from(b.build()))
@@ -73,12 +86,25 @@ impl Dispatcher {
                 let mut pools: Vec<Arc<Pool>> = vec![];
 
                 for endpoint in &v.endpoints {
-                    let next = {
-                        let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
-                        let p = b.build(Clone::clone(&self.closer)).await?;
-                        Pool::Tcp(p)
+                    let pool = match endpoint.transport.unwrap_or(v.transport) {
+                        TransportKind::Tcp => {
+                            if endpoint.tls.is_some_and(|it| it) || endpoint.addr.ends_with(":443")
+                            {
+                                let b = to_tls_stream_pool_builder(&endpoint.addr)?;
+                                let p = b.build(Clone::clone(&self.closer)).await?;
+                                Pool::Tls(p)
+                            } else {
+                                let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
+                                let p = b.build(Clone::clone(&self.closer)).await?;
+                                Pool::Tcp(p)
+                            }
+                        }
+                        TransportKind::Udp => {
+                            todo!()
+                        }
                     };
-                    pools.push(next.into());
+
+                    pools.push(pool.into());
                 }
                 Arc::new(RoundRobinPools::from(pools))
             }
@@ -147,6 +173,25 @@ impl Dispatcher {
 
         Ok(())
     }
+}
+
+#[inline]
+fn to_tls_stream_pool_builder(addr: &str) -> anyhow::Result<TlsStreamPoolBuilder> {
+    let mut sp = addr.split(':');
+    if let Some(left) = sp.next() {
+        if let Some(right) = sp.next() {
+            if let Ok(port) = right.parse::<u16>() {
+                if sp.next().is_none() {
+                    return Ok(match left.parse::<IpAddr>() {
+                        Ok(ip) => TlsStreamPoolBuilder::with_addr(SocketAddr::new(ip, port)),
+                        Err(_) => TlsStreamPoolBuilder::with_domain(left, port),
+                    });
+                }
+            }
+        }
+    }
+
+    bail!(CapybaraError::InvalidUpstream(addr.to_string().into()));
 }
 
 #[inline]

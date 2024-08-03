@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::error::CapybaraError;
 use crate::pipeline::stream::load;
 use crate::pipeline::stream::StreamPipelineFactoryExt;

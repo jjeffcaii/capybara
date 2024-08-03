@@ -3,11 +3,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::cachestr::Cachestr;
 use crate::error::CapybaraError;
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
 use crate::proto::UpstreamKey;
 use crate::protocol::http::{Headers, HttpField, Queries, RequestLine};
+use capybara_util::cachestr::Cachestr;
 
 struct Route {
     must: Vec<MatchRule>,

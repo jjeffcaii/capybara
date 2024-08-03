@@ -2,10 +2,7 @@
 name = "capybara-core"
 version = "0.0.0"
 edition = "2021"
-build = "build.rs"
 
-[build-dependencies]
-string_cache_codegen = "0.5"
 
 [dev-dependencies]
 pretty_env_logger = "0.5.0"
@@ -44,7 +41,6 @@ urlencoding = "2.1"
 md5 = "0.7"
 ahash = "0.8"
 parking_lot = "0.12"
-string_cache = "0.8"
 strum = { version = "0.26", default-features = false, features = ["strum_macros", "derive"] }
 strum_macros = "0.26"
 tokio-rustls = "0.24"

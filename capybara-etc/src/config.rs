@@ -74,6 +74,8 @@ pub struct UpstreamConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct EndpointConfig {
+    pub transport: Option<TransportKind>,
+    pub tls: Option<bool>,
     pub resolver: Option<String>,
     pub addr: String,
     pub weight: Option<u32>,

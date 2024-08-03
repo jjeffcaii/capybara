@@ -5,7 +5,8 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use rustls::ServerName;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::{CapybaraError, Result};
 
 #[derive(Clone, Hash, Eq, PartialEq)]

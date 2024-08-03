@@ -6,14 +6,17 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
+use deadpool::managed::Manager;
 use futures::{Stream, StreamExt};
 use rustls::ServerName;
+use smallvec::SmallVec;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf};
 use tokio::sync::Notify;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::FramedRead;
 
-use crate::cachestr::Cachestr;
+use capybara_util::cachestr::Cachestr;
+
 use crate::pipeline::http::{
     load, AnyString, HeaderOperator, HeadersContext, HttpContextFlags, HttpPipelineFactoryExt,
 };
@@ -24,7 +27,7 @@ use crate::protocol::http::{
     misc, Headers, HttpCodec, HttpField, HttpFrame, RequestLine, Response, ResponseFlags,
     StatusLine,
 };
-use crate::transport::tcp;
+use crate::transport::{tcp, Address, Addressable};
 use crate::upstream::{Pool, Pools, Upstreams};
 use crate::Result;
 
@@ -418,29 +421,6 @@ where
                         .await?;
                 }
 
-                let mut has_upstream = false;
-
-                if let Some(uk) = self.ctx.upstream() {
-                    has_upstream = true;
-                    match &*uk {
-                        UpstreamKey::Tls(_, sni) => self.set_request_sni(sni),
-                        UpstreamKey::TlsHP(_, _, sni) => self.set_request_sni(sni),
-                        UpstreamKey::TcpHP(host, port) => {
-                            // check if http port
-                            let host = if *port == 80 {
-                                AnyString::Cache(Clone::clone(host))
-                            } else {
-                                AnyString::String(format!("{}:{}", host, port))
-                            };
-                            self.ctx
-                                .request()
-                                .headers()
-                                ._replace(HttpField::Host.into(), host);
-                        }
-                        _ => (),
-                    }
-                }
-
                 match self.downstream.0.next().await {
                     Some(second) => {
                         let HttpFrame::Headers(mut headers) = second? else {
@@ -468,28 +448,6 @@ where
                                 }
                             }
                         };
-
-                        if !has_upstream {
-                            if let Some(kind) = self.ctx.upstream() {
-                                match &*kind {
-                                    UpstreamKey::Tls(_, sni) => self.set_request_sni(sni),
-                                    UpstreamKey::TlsHP(_, _, sni) => self.set_request_sni(sni),
-                                    UpstreamKey::TcpHP(host, port) => {
-                                        // check if http port
-                                        let host = if *port == 80 {
-                                            AnyString::Cache(Clone::clone(host))
-                                        } else {
-                                            AnyString::String(format!("{}:{}", host, port))
-                                        };
-                                        self.ctx
-                                            .request()
-                                            .headers()
-                                            ._replace(HttpField::Host.into(), host);
-                                    }
-                                    _ => (),
-                                }
-                            }
-                        }
 
                         Ok(Some(Handshake {
                             request_line,
@@ -619,11 +577,62 @@ where
                             let pool = self.upstreams.get(uk, 0).await?;
                             match &*pool {
                                 Pool::Tcp(pool) => {
+                                    if !self.ctx.request().headers()._exist(HttpField::Host.into())
+                                    {
+                                        if let Address::Domain(dom, port) = pool.manager().address()
+                                        {
+                                            let host = if *port == 80 {
+                                                AnyString::Cache(Clone::clone(dom))
+                                            } else {
+                                                let host = {
+                                                    use std::io::Write;
+                                                    let mut b = SmallVec::<[u8; 128]>::new();
+                                                    write!(&mut b[..], "{}:{}", dom.as_ref(), port)
+                                                        .ok();
+                                                    Cachestr::from(unsafe {
+                                                        std::str::from_utf8_unchecked(&b[..])
+                                                    })
+                                                };
+                                                AnyString::Cache(host)
+                                            };
+
+                                            self.ctx
+                                                .request()
+                                                .headers()
+                                                ._replace(HttpField::Host.into(), host);
+                                        }
+                                    }
+
                                     let mut upstream = pool.get().await?;
                                     self.transfer(upstream.as_mut(), request_line, request_headers)
                                         .await?
                                 }
                                 Pool::Tls(pool) => {
+                                    if !self.ctx.request().headers()._exist(HttpField::Host.into())
+                                    {
+                                        if let Address::Domain(dom, port) = pool.manager().address()
+                                        {
+                                            let host = if *port == 443 {
+                                                AnyString::Cache(Clone::clone(dom))
+                                            } else {
+                                                let host = {
+                                                    let mut b = SmallVec::<[u8; 128]>::new();
+                                                    use std::io::Write;
+                                                    write!(&mut b[..], "{}:{}", dom.as_ref(), port)
+                                                        .ok();
+                                                    Cachestr::from(unsafe {
+                                                        std::str::from_utf8_unchecked(&b[..])
+                                                    })
+                                                };
+                                                AnyString::Cache(host)
+                                            };
+                                            self.ctx
+                                                .request()
+                                                .headers()
+                                                ._replace(HttpField::Host.into(), host);
+                                        }
+                                    }
+
                                     let mut upstream = pool.get().await?;
                                     self.transfer(upstream.as_mut(), request_line, request_headers)
                                         .await?

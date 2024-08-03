@@ -2,6 +2,10 @@
 name = "capybara-util"
 version = "0.0.0"
 edition = "2021"
+build = "build.rs"
+
+[build-dependencies]
+string_cache_codegen = "0.5"
 
 [dev-dependencies]
 log = "0.4"
@@ -13,3 +17,4 @@ foreign-types = "0.5"
 libc = "0.2"
 anyhow = "1"
 rand = "0.8"
+string_cache = "0.8"

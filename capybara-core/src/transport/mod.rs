@@ -1,16 +1,19 @@
 use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 
+use capybara_util::cachestr::Cachestr;
 pub use tcp::TcpListenerBuilder;
 pub use tls::{TlsAcceptorBuilder, TlsConnectorBuilder};
-
-use crate::cachestr::Cachestr;
 
 pub mod tcp;
 pub mod tls;
 
+pub trait Addressable {
+    fn address(&self) -> &Address;
+}
+
 #[derive(Clone)]
-pub(super) enum Address {
+pub enum Address {
     Direct(SocketAddr),
     Domain(Cachestr, u16),
 }
