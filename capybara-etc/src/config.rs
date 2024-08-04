@@ -6,7 +6,9 @@ pub type Properties = HashMap<String, serde_yaml::Value>;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Config {
+    #[serde(default)]
     pub listeners: HashMap<String, ListenerConfig>,
+    #[serde(default)]
     pub upstreams: HashMap<String, UpstreamConfig>,
 }
 
@@ -50,8 +52,6 @@ impl Default for TransportKind {
 pub enum BalanceStrategy {
     #[serde(rename = "weighted")]
     Weighted,
-    #[serde(rename = "ip-hash")]
-    IpHash,
     #[serde(rename = "round-robin")]
     RoundRobin,
 }

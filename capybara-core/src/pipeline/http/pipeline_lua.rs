@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
 use crate::proto::UpstreamKey;
-use crate::protocol::http::{Headers, Method, RequestLine, Response, StatusLine};
+use crate::protocol::http::{Headers, HttpField, Method, RequestLine, Response, StatusLine};
 use crate::CapybaraError;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -141,6 +141,23 @@ impl UserData for LuaHttpRequestContext {
                 s.parse::<UpstreamKey>().map_err(LuaError::external)?
             };
             ctx.set_upstream(uk);
+            Ok(())
+        });
+
+        methods.add_method("redirect", |lua, this, args: (LuaString, Option<bool>)| {
+            let ctx = unsafe { this.0.as_mut() }.unwrap();
+
+            let redirect = args.0.to_string_lossy();
+            let permanent = args.1.unwrap_or_default();
+
+            let respond = Response::builder()
+                .header(HttpField::Location.as_str(), redirect)
+                .content_type("text/plain")
+                .status_code(if permanent { 301 } else { 302 })
+                .build();
+
+            ctx.respond(respond);
+
             Ok(())
         });
 

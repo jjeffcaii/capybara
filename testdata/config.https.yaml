@@ -1,0 +1,34 @@
+listeners:
+  noencrypt:
+    listen: 0.0.0.0:80
+    protocol:
+      name: http
+      props:
+    pipelines:
+      - name: capybara.pipelines.http.lua
+        props:
+          content: |
+            local uri = ''
+
+            function handle_request_line(ctx,request_line)
+              uri = request_line:uri()
+            end
+
+            function handle_request_headers(ctx,headers)
+              ctx:redirect('https://'..headers:get('Host')..uri)
+            end
+
+  letsencrypt:
+    listen: 0.0.0.0:443
+    protocol:
+      name: https
+      props:
+        key_path: ./capybara-core/examples/localhost.key.pem
+        cert_path: ./capybara-core/examples/localhost.cert.pem
+    pipelines:
+      - name: capybara.pipelines.http.lua
+        props:
+          content: |
+            function handle_request_line(ctx,request_line)
+              ctx:set_upstream('https://letsencrypt.org')
+            end

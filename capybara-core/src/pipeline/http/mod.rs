@@ -8,6 +8,7 @@ pub use registry::{register, HttpPipelineFactory};
 
 mod noop;
 mod pipeline;
+mod pipeline_acme;
 mod pipeline_lua;
 mod pipeline_router;
 mod registry;

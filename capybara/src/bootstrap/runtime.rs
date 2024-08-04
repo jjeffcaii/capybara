@@ -7,8 +7,10 @@ use tokio::sync::{mpsc, Notify, RwLock};
 
 use capybara_core::proto::{Listener, Signal};
 use capybara_core::protocol::http::HttpListener;
+use capybara_core::protocol::stream::StreamListener;
 use capybara_core::transport::tcp::TcpStreamPoolBuilder;
 use capybara_core::transport::tls::TlsStreamPoolBuilder;
+use capybara_core::transport::TlsAcceptorBuilder;
 use capybara_core::{CapybaraError, Pool, Pools, RoundRobinPools, WeightedPools};
 use capybara_etc::{BalanceStrategy, Config, ListenerConfig, TransportKind, UpstreamConfig};
 use capybara_util::WeightedResource;
@@ -61,7 +63,9 @@ impl Dispatcher {
 
                     let p = match endpoint.transport.as_ref().unwrap_or(&v.transport) {
                         TransportKind::Tcp => {
-                            if endpoint.tls.is_some_and(|it| it) || endpoint.addr.ends_with(":443")
+                            if endpoint
+                                .tls
+                                .unwrap_or_else(|| endpoint.addr.ends_with(":443"))
                             {
                                 let b = to_tls_stream_pool_builder(&endpoint.addr)?;
                                 Pool::Tls(b.build(Clone::clone(&self.closer)).await?)
@@ -79,16 +83,15 @@ impl Dispatcher {
                 }
                 Arc::new(WeightedPools::from(b.build()))
             }
-            BalanceStrategy::IpHash => {
-                todo!()
-            }
             BalanceStrategy::RoundRobin => {
                 let mut pools: Vec<Arc<Pool>> = vec![];
 
                 for endpoint in &v.endpoints {
                     let pool = match endpoint.transport.unwrap_or(v.transport) {
                         TransportKind::Tcp => {
-                            if endpoint.tls.is_some_and(|it| it) || endpoint.addr.ends_with(":443")
+                            if endpoint
+                                .tls
+                                .unwrap_or_else(|| endpoint.addr.ends_with(":443"))
                             {
                                 let b = to_tls_stream_pool_builder(&endpoint.addr)?;
                                 let p = b.build(Clone::clone(&self.closer)).await?;
@@ -138,9 +141,10 @@ impl Dispatcher {
 
     #[inline]
     async fn create_listener(&mut self, k: String, c: ListenerConfig) -> anyhow::Result<()> {
+        let addr = c.listen.parse::<SocketAddr>()?;
+
         let listener: Arc<dyn Listener> = match c.protocol.name.as_str() {
             "http" => {
-                let addr = c.listen.parse::<SocketAddr>()?;
                 let mut b = HttpListener::builder(addr).id(&k);
 
                 for p in &c.pipelines {
@@ -149,6 +153,48 @@ impl Dispatcher {
 
                 for (k, v) in &self.upstreams {
                     b = b.upstream(k, Clone::clone(v));
+                }
+
+                Arc::new(b.build()?)
+            }
+            "https" => {
+                let mut b = HttpListener::builder(addr).id(&k);
+
+                let tls_acceptor = {
+                    let mut tb = TlsAcceptorBuilder::default();
+
+                    if let Some(path) = c.protocol.props.get("key_path") {
+                        if let Some(key_path) = path.as_str() {
+                            tb = tb.key_path(PathBuf::from(key_path));
+                        }
+                    }
+
+                    if let Some(path) = c.protocol.props.get("cert_path") {
+                        if let Some(cert_path) = path.as_str() {
+                            tb = tb.cert_path(PathBuf::from(cert_path));
+                        }
+                    }
+
+                    tb.build()?
+                };
+
+                b = b.tls(tls_acceptor);
+
+                for p in &c.pipelines {
+                    b = b.pipeline(&p.name, &p.props);
+                }
+
+                for (k, v) in &self.upstreams {
+                    b = b.upstream(k, Clone::clone(v));
+                }
+
+                Arc::new(b.build()?)
+            }
+            "stream" => {
+                let mut b = StreamListener::builder(addr).id(&k);
+
+                for p in &c.pipelines {
+                    b = b.pipeline(&p.name, &p.props);
                 }
 
                 Arc::new(b.build()?)
