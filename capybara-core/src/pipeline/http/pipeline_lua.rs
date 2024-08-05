@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use tokio::sync::Mutex;
 
+use crate::pipeline::http::HttpContextFlags;
 use crate::pipeline::{HttpContext, HttpPipeline, HttpPipelineFactory, PipelineConf};
 use crate::proto::UpstreamKey;
 use crate::protocol::http::{Headers, HttpField, Method, RequestLine, Response, StatusLine};
@@ -101,6 +102,15 @@ impl UserData for LuaHttpRequestContext {
         methods.add_method("id", |lua, this, ()| {
             let ctx = unsafe { this.0.as_mut() }.unwrap();
             Ok(ctx.id())
+        });
+
+        methods.add_method("schema", |lua, this, ()| {
+            let ctx = unsafe { this.0.as_mut() }.unwrap();
+            if ctx.flags.contains(HttpContextFlags::HTTPS) {
+                Ok("https")
+            } else {
+                Ok("http")
+            }
         });
 
         methods.add_method("replace_header", |_, this, args: (LuaString, LuaString)| {
@@ -202,6 +212,14 @@ impl UserData for LuaHttpResponseContext {
         methods.add_method("id", |lua, this, ()| {
             let ctx = unsafe { this.0.as_mut() }.unwrap();
             Ok(ctx.id())
+        });
+        methods.add_method("schema", |lua, this, ()| {
+            let ctx = unsafe { this.0.as_mut() }.unwrap();
+            if ctx.flags.contains(HttpContextFlags::HTTPS) {
+                Ok("https")
+            } else {
+                Ok("http")
+            }
         });
 
         methods.add_method("replace_header", |_, this, args: (LuaString, LuaString)| {

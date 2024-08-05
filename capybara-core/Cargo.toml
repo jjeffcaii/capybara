@@ -65,6 +65,7 @@ moka = { version = "0.12", features = ["future", "sync"] }
 mlua = { version = "0.9", features = ["luajit", "vendored", "serialize", "async", "macros", "send", "parking_lot"] }
 garde = { version = "0.20", features = ["serde", "derive", "pattern", "regex"] }
 bytesize = { version = "1.2", features = ["serde"] }
+liquid = "0.26"
 
 [[example]]
 name = "httpbin"

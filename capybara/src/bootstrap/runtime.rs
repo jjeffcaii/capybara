@@ -1,6 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use hashbrown::HashMap;
 use tokio::sync::{mpsc, Notify, RwLock};
@@ -12,7 +13,9 @@ use capybara_core::transport::tcp::TcpStreamPoolBuilder;
 use capybara_core::transport::tls::TlsStreamPoolBuilder;
 use capybara_core::transport::TlsAcceptorBuilder;
 use capybara_core::{CapybaraError, Pool, Pools, RoundRobinPools, WeightedPools};
-use capybara_etc::{BalanceStrategy, Config, ListenerConfig, TransportKind, UpstreamConfig};
+use capybara_etc::{
+    BalanceStrategy, Config, ListenerConfig, Properties, TransportKind, UpstreamConfig,
+};
 use capybara_util::WeightedResource;
 
 use crate::provider::{ConfigProvider, StaticFileWatcher};
@@ -139,6 +142,17 @@ impl Dispatcher {
         Ok(())
     }
 
+    fn get_duration(props: &Properties, key: &str) -> Option<Duration> {
+        if let Some(val) = props.get(key) {
+            if let Some(s) = val.as_str() {
+                if let Ok(d) = duration_str::parse_std(s) {
+                    return Some(d);
+                }
+            }
+        }
+        None
+    }
+
     #[inline]
     async fn create_listener(&mut self, k: String, c: ListenerConfig) -> anyhow::Result<()> {
         let addr = c.listen.parse::<SocketAddr>()?;
@@ -146,6 +160,25 @@ impl Dispatcher {
         let listener: Arc<dyn Listener> = match c.protocol.name.as_str() {
             "http" => {
                 let mut b = HttpListener::builder(addr).id(&k);
+
+                if let Some(d) = Self::get_duration(&c.protocol.props, "client_header_timeout") {
+                    b = b.client_header_timeout(d);
+                }
+                if let Some(d) = Self::get_duration(&c.protocol.props, "client_body_timeout") {
+                    b = b.client_body_timeout(d);
+                }
+                if let Some(d) = Self::get_duration(&c.protocol.props, "keepalive_timeout") {
+                    b = b.keepalive_timeout(d);
+                }
+                if let Some(d) = Self::get_duration(&c.protocol.props, "proxy_connect_timeout") {
+                    b = b.proxy_connect_timeout(d);
+                }
+                if let Some(d) = Self::get_duration(&c.protocol.props, "proxy_read_timeout") {
+                    b = b.proxy_read_timeout(d);
+                }
+                if let Some(d) = Self::get_duration(&c.protocol.props, "proxy_send_timeout") {
+                    b = b.proxy_send_timeout(d);
+                }
 
                 for p in &c.pipelines {
                     b = b.pipeline(&p.name, &p.props);

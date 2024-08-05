@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::io;
+use tokio::time::error::Elapsed;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CapybaraError {
@@ -57,6 +58,9 @@ pub enum CapybaraError {
 
     #[error("cannot parse upstream from '{0}'")]
     InvalidUpstream(Cow<'static, str>),
+
+    #[error("operation timeout")]
+    Timeout,
 
     #[error(transparent)]
     Other(#[from] anyhow::Error), // source and Display delegate to anyhow::Error

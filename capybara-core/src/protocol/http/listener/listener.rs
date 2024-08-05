@@ -2,16 +2,19 @@ use std::io;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool::managed::Manager;
 use futures::{Stream, StreamExt};
+use once_cell::sync::Lazy;
 use rustls::ServerName;
 use smallvec::SmallVec;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf};
 use tokio::sync::Notify;
+use tokio::time::error::Elapsed;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::FramedRead;
 
@@ -23,13 +26,37 @@ use crate::pipeline::http::{
 use crate::pipeline::{HttpContext, PipelineConf};
 use crate::proto::{Listener, Signal, Signals, UpstreamKey};
 use crate::protocol::http::codec::Flags;
+use crate::protocol::http::misc::SERVER;
 use crate::protocol::http::{
     misc, Headers, HttpCodec, HttpField, HttpFrame, RequestLine, Response, ResponseFlags,
     StatusLine,
 };
 use crate::transport::{tcp, Address, Addressable};
 use crate::upstream::{Pool, Pools, Upstreams};
-use crate::Result;
+use crate::{CapybaraError, Result};
+
+static HTML_408: Lazy<Bytes> = Lazy::new(|| render_html(include_str!("408.html")));
+static HTML_500: Lazy<Bytes> = Lazy::new(|| render_html(include_str!("500.html")));
+static HTML_502: Lazy<Bytes> = Lazy::new(|| render_html(include_str!("502.html")));
+static HTML_504: Lazy<Bytes> = Lazy::new(|| render_html(include_str!("504.html")));
+
+#[inline(always)]
+fn render_html(html: &'static str) -> Bytes {
+    if let Ok(template) = liquid::ParserBuilder::with_stdlib()
+        .build()
+        .unwrap()
+        .parse(html)
+    {
+        let globals = liquid::object!({
+            "server": SERVER.as_str(),
+        });
+
+        if let Ok(v) = template.render(&globals) {
+            return Bytes::from(v);
+        }
+    }
+    Bytes::from(html.as_bytes())
+}
 
 pub struct HttpListenerBuilder {
     addr: SocketAddr,
@@ -37,6 +64,7 @@ pub struct HttpListenerBuilder {
     id: Option<Cachestr>,
     pipelines: Vec<(Cachestr, PipelineConf)>,
     upstreams: Vec<(Cachestr, Arc<dyn Pools>)>,
+    cfg: Config,
 }
 
 impl HttpListenerBuilder {
@@ -62,6 +90,36 @@ impl HttpListenerBuilder {
         self
     }
 
+    pub fn client_header_timeout(mut self, timeout: Duration) -> Self {
+        self.cfg.client_header_timeout = timeout;
+        self
+    }
+
+    pub fn client_body_timeout(mut self, timeout: Duration) -> Self {
+        self.cfg.client_body_timeout = timeout;
+        self
+    }
+
+    pub fn proxy_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.cfg.proxy_connect_timeout = timeout;
+        self
+    }
+
+    pub fn proxy_read_timeout(mut self, timeout: Duration) -> Self {
+        self.cfg.proxy_read_timeout = timeout;
+        self
+    }
+
+    pub fn proxy_send_timeout(mut self, timeout: Duration) -> Self {
+        self.cfg.proxy_send_timeout = timeout;
+        self
+    }
+
+    pub fn keepalive_timeout(mut self, timeout: Duration) -> Self {
+        self.cfg.keepalive_timeout = timeout;
+        self
+    }
+
     pub fn upstream<K>(mut self, key: K, pools: Arc<dyn Pools>) -> Self
     where
         K: AsRef<str>,
@@ -77,6 +135,7 @@ impl HttpListenerBuilder {
             pipelines,
             tls,
             upstreams,
+            cfg,
         } = self;
 
         let closer = Arc::new(Notify::new());
@@ -92,13 +151,39 @@ impl HttpListenerBuilder {
             addr,
             pipelines: ArcSwap::from_pointee(pipelines),
             upstreams: ub.build(),
+            cfg: ArcSwap::from_pointee(cfg),
             closer,
         })
     }
 }
 
+struct Config {
+    client_header_timeout: Duration,
+    client_body_timeout: Duration,
+    keepalive_timeout: Duration,
+    proxy_connect_timeout: Duration,
+    proxy_read_timeout: Duration,
+    proxy_send_timeout: Duration,
+    upstreams_retries: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            client_header_timeout: Duration::from_secs(60),
+            client_body_timeout: Duration::from_secs(60),
+            keepalive_timeout: Duration::from_secs(75),
+            proxy_connect_timeout: Duration::from_secs(60),
+            proxy_read_timeout: Duration::from_secs(60),
+            proxy_send_timeout: Duration::from_secs(60),
+            upstreams_retries: 0,
+        }
+    }
+}
+
 pub struct HttpListener {
     id: Cachestr,
+    cfg: ArcSwap<Config>,
     addr: SocketAddr,
     tls: Option<TlsAcceptor>,
     pipelines: ArcSwap<Vec<(Cachestr, PipelineConf)>>,
@@ -114,6 +199,7 @@ impl HttpListener {
             tls: None,
             pipelines: Default::default(),
             upstreams: Default::default(),
+            cfg: Default::default(),
         }
     }
 
@@ -130,17 +216,28 @@ impl HttpListener {
         Ok(factories)
     }
 
+    #[inline(always)]
     fn build_context(
+        flags: HttpContextFlags,
         client_addr: SocketAddr,
         factories: &[Box<dyn HttpPipelineFactoryExt>],
     ) -> Result<HttpContext> {
-        let mut b = HttpContext::builder(client_addr);
+        let mut b = HttpContext::builder(client_addr).flags(flags);
 
         for next in factories {
             b = b.pipeline_arc(next.generate_arc()?);
         }
 
         Ok(b.build())
+    }
+
+    #[inline(always)]
+    fn build_http_context_flags(&self) -> HttpContextFlags {
+        let mut f = HttpContextFlags::default();
+        if self.tls.is_some() {
+            f.set(HttpContextFlags::HTTPS, true);
+        }
+        f
     }
 }
 
@@ -154,6 +251,8 @@ impl Listener for HttpListener {
         let l = tcp::TcpListenerBuilder::new(self.addr).build()?;
         let mut pipelines = self.build_pipeline_factories()?;
         info!("listener '{}' is listening on {:?}", &self.id, &self.addr);
+
+        let mut flags = self.build_http_context_flags();
 
         loop {
             tokio::select! {
@@ -172,6 +271,7 @@ impl Listener for HttpListener {
                             info!("listener '{}' is reloading...", &self.id);
                             // TODO: reload the current listener
                             pipelines = self.build_pipeline_factories()?;
+                            flags = self.build_http_context_flags();
                         }
                     }
 
@@ -180,12 +280,20 @@ impl Listener for HttpListener {
                     let (stream, addr) = accept?;
 
                     debug!("accept a new tcp stream {:?}", &addr);
-                    let ctx = Self::build_context(addr, &pipelines[..])?;
+                    let ctx = Self::build_context(flags, addr, &pipelines[..])?;
+                    let cfg = self.cfg.load_full();
+                    let closer = Clone::clone(&self.closer);
 
                     match &self.tls {
                         None => {
                             let upstreams = Clone::clone(&self.upstreams);
-                            let mut handler = Handler::new(ctx, stream, Clone::clone(&self.closer), upstreams);
+                            let mut handler = Handler::new(
+                                ctx,
+                                cfg,
+                                stream,
+                                closer,
+                                upstreams,
+                            );
                             tokio::spawn(async move {
                                 if let Err(e) = handler.handle().await {
                                     error!("http handler end: {}", e);
@@ -195,7 +303,13 @@ impl Listener for HttpListener {
                         Some(tls) => {
                             if let Ok(stream) = tls.accept(stream).await {
                                 let upstreams = Clone::clone(&self.upstreams);
-                                let mut handler = Handler::new(ctx, stream, Clone::clone(&self.closer), upstreams);
+                                let mut handler = Handler::new(
+                                    ctx,
+                                    cfg,
+                                    stream,
+                                    closer,
+                                    upstreams,
+                                );
                                 tokio::spawn(async move {
                                     if let Err(e) = handler.handle().await {
                                         error!("http handler end: {}", e);
@@ -226,6 +340,7 @@ struct Handler<S> {
     deny_headers: roaring::RoaringBitmap,
     ctx: HttpContext,
     upstreams: Upstreams,
+    cfg: Arc<Config>,
 }
 
 impl<S> Handler<S> {
@@ -237,7 +352,13 @@ where
     S: AsyncWrite + AsyncRead + Sync + Send + 'static,
 {
     #[inline]
-    fn new(ctx: HttpContext, stream: S, closer: Arc<Notify>, upstreams: Upstreams) -> Self {
+    fn new(
+        ctx: HttpContext,
+        cfg: Arc<Config>,
+        stream: S,
+        closer: Arc<Notify>,
+        upstreams: Upstreams,
+    ) -> Self {
         let (rh, wh) = tokio::io::split(stream);
 
         let downstream = (
@@ -250,6 +371,7 @@ where
 
         Self {
             ctx,
+            cfg,
             downstream,
             upstreams,
             deny_headers: Default::default(),
@@ -401,64 +523,73 @@ where
 
     #[inline]
     async fn handshake(&mut self) -> Result<Option<Handshake>> {
-        match self.downstream.0.next().await {
-            Some(first) => {
-                // check io error
-                if let Err(e) = &first {
-                    if let Some(e) = e.downcast_ref::<io::Error>() {
-                        if matches!(e.kind(), ErrorKind::UnexpectedEof) {
-                            return Ok(None);
+        use tokio::time;
+
+        match time::timeout(self.cfg.client_header_timeout, self.downstream.0.next()).await {
+            Ok(first_result) => {
+                match first_result {
+                    Some(first) => {
+                        // check io error
+                        if let Err(e) = &first {
+                            if let Some(e) = e.downcast_ref::<io::Error>() {
+                                if matches!(e.kind(), ErrorKind::UnexpectedEof) {
+                                    return Ok(None);
+                                }
+                            }
                         }
-                    }
-                }
 
-                let HttpFrame::RequestLine(mut request_line) = first? else {
-                    unreachable!()
-                };
-
-                if let Some(p) = self.ctx.pipeline() {
-                    p.handle_request_line(&mut self.ctx, &mut request_line)
-                        .await?;
-                }
-
-                match self.downstream.0.next().await {
-                    Some(second) => {
-                        let HttpFrame::Headers(mut headers) = second? else {
+                        let HttpFrame::RequestLine(mut request_line) = first? else {
                             unreachable!()
                         };
 
                         if let Some(p) = self.ctx.pipeline() {
-                            p.handle_request_headers(&mut self.ctx, &mut headers)
+                            p.handle_request_line(&mut self.ctx, &mut request_line)
                                 .await?;
                         }
 
-                        let status = {
-                            let connection = headers.get_by_field(HttpField::Connection);
-                            if request_line.nohttp11() {
-                                match connection {
-                                    Some(v) if v.eq_ignore_ascii_case(b"keep-alive") => {
-                                        Status::KeepAlive
-                                    }
-                                    _ => Status::Close,
-                                }
-                            } else {
-                                match connection {
-                                    Some(v) if v.eq_ignore_ascii_case(b"close") => Status::Close,
-                                    _ => Status::KeepAlive,
-                                }
-                            }
-                        };
+                        match self.downstream.0.next().await {
+                            Some(second) => {
+                                let HttpFrame::Headers(mut headers) = second? else {
+                                    unreachable!()
+                                };
 
-                        Ok(Some(Handshake {
-                            request_line,
-                            request_headers: headers,
-                            status,
-                        }))
+                                if let Some(p) = self.ctx.pipeline() {
+                                    p.handle_request_headers(&mut self.ctx, &mut headers)
+                                        .await?;
+                                }
+
+                                let status = {
+                                    let connection = headers.get_by_field(HttpField::Connection);
+                                    if request_line.nohttp11() {
+                                        match connection {
+                                            Some(v) if v.eq_ignore_ascii_case(b"keep-alive") => {
+                                                Status::KeepAlive
+                                            }
+                                            _ => Status::Close,
+                                        }
+                                    } else {
+                                        match connection {
+                                            Some(v) if v.eq_ignore_ascii_case(b"close") => {
+                                                Status::Close
+                                            }
+                                            _ => Status::KeepAlive,
+                                        }
+                                    }
+                                };
+
+                                Ok(Some(Handshake {
+                                    request_line,
+                                    request_headers: headers,
+                                    status,
+                                }))
+                            }
+                            None => Ok(None),
+                        }
                     }
                     None => Ok(None),
                 }
             }
-            None => Ok(None),
+            Err(_) => Err(CapybaraError::Timeout),
         }
     }
 
@@ -556,6 +687,7 @@ where
         loop {
             self.ctx.reset();
             self.deny_headers.clear();
+
             match self.handshake().await {
                 Ok(Some(Handshake {
                     request_line,
@@ -647,7 +779,7 @@ where
                             self.exhaust_requests().await?;
                             let resp = Response::builder()
                                 .status_code(502)
-                                .body(include_bytes!("502.html"))
+                                .body(&HTML_502[..])
                                 .content_type("text/html")
                                 .build();
                             resp.write_to(&mut self.downstream.1, ResponseFlags::default())
@@ -662,6 +794,24 @@ where
                 }
                 Err(e) => {
                     error!("http handshake failed: {}", e);
+
+                    // TODO: how to get the root cause???
+                    if let Some((code, html)) = match &e {
+                        CapybaraError::InvalidUpstream(_) => Some((502, &HTML_502[..])),
+                        CapybaraError::Timeout => Some((408, &HTML_408[..])),
+                        _ => Some((500, &HTML_500[..])),
+                    } {
+                        let resp = Response::builder()
+                            .status_code(code)
+                            .body(html)
+                            .content_type("text/html")
+                            .header(HttpField::Connection.as_str(), "close")
+                            .build();
+                        resp.write_to(&mut self.downstream.1, ResponseFlags::default())
+                            .await?;
+                        self.downstream.1.flush().await?;
+                    }
+
                     // TODO: cleanup
                     break;
                 }

@@ -78,7 +78,8 @@ pub(crate) struct HttpContextFlags(u32);
 
 bitflags! {
     impl HttpContextFlags: u32 {
-        const DOWNSTREAM_EXHAUSTED = 1 << 0;
+        const HTTPS = 1 << 0;
+        const DOWNSTREAM_EXHAUSTED = 1 << 1;
     }
 }
 

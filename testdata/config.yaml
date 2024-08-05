@@ -4,11 +4,13 @@ listeners:
     protocol:
       name: http
       props:
+        client_header_timeout: 3s
+        client_body_timeout: 3s
     pipelines:
       - name: capybara.pipelines.http.lua
         props:
           content: |
-            cnts = 0
+            local cnts = 0
 
             function handle_request_headers(ctx,headers)
               local u = headers:get('x-upstream-key')
