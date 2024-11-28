@@ -1,3 +1,5 @@
+![logo](./docs/capybara.jpg)
+
 # Capybara
 
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/jjeffcaii/capybara/rust.yml)

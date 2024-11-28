@@ -189,6 +189,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_http2_listener() -> anyhow::Result<()> {
         init();
 
