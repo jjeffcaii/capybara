@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use rustls::ServerName;
+use rustls::pki_types::ServerName;
 
 use capybara_util::cachestr::Cachestr;
 
@@ -12,9 +12,9 @@ use crate::{CapybaraError, Result};
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub enum UpstreamKey {
     Tcp(SocketAddr),
-    Tls(SocketAddr, ServerName),
+    Tls(SocketAddr, ServerName<'static>),
     TcpHP(Cachestr, u16),
-    TlsHP(Cachestr, u16, ServerName),
+    TlsHP(Cachestr, u16, ServerName<'static>),
     Tag(Cachestr),
 }
 
@@ -46,9 +46,10 @@ impl FromStr for UpstreamKey {
             }
         }
 
-        fn to_sni(sni: &str) -> Result<ServerName> {
+        fn to_sni(sni: &str) -> Result<ServerName<'static>> {
             ServerName::try_from(sni)
                 .map_err(|_| CapybaraError::InvalidTlsSni(sni.to_string().into()))
+                .map(|it| it.to_owned())
         }
 
         // FIXME: too many duplicated codes
@@ -74,7 +75,10 @@ impl FromStr for UpstreamKey {
             let (host, port) = host_and_port(suffix)?;
             let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
             return Ok(match host.parse::<IpAddr>() {
-                Ok(ip) => UpstreamKey::Tls(SocketAddr::new(ip, port), ServerName::IpAddress(ip)),
+                Ok(ip) => {
+                    let server_name = ServerName::from(ip);
+                    UpstreamKey::Tls(SocketAddr::new(ip, port), server_name)
+                }
                 Err(_) => UpstreamKey::TlsHP(Cachestr::from(host), port, to_sni(host)?),
             });
         }
@@ -92,7 +96,10 @@ impl FromStr for UpstreamKey {
             let (host, port) = host_and_port(suffix)?;
             let port = port.unwrap_or(443);
             return Ok(match host.parse::<IpAddr>() {
-                Ok(ip) => UpstreamKey::Tls(SocketAddr::new(ip, port), ServerName::IpAddress(ip)),
+                Ok(ip) => {
+                    let server_name = ServerName::from(ip);
+                    UpstreamKey::Tls(SocketAddr::new(ip, port), server_name)
+                }
                 Err(_) => UpstreamKey::TlsHP(Cachestr::from(host), port, to_sni(host)?),
             });
         }

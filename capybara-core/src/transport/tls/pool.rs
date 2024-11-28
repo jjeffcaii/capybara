@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use deadpool::managed::{Metrics, RecycleError, RecycleResult};
 use deadpool::{managed, Runtime};
-use rustls::ServerName;
+use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 
@@ -28,7 +28,7 @@ pub struct TlsStreamPoolBuilder {
     buff_size: usize,
     idle_time: Option<Duration>,
     resolver: Option<Arc<dyn Resolver>>,
-    sni: Option<ServerName>,
+    sni: Option<ServerName<'static>>,
 }
 
 impl TlsStreamPoolBuilder {
@@ -60,7 +60,7 @@ impl TlsStreamPoolBuilder {
         }
     }
 
-    pub fn sni(mut self, server_name: ServerName) -> Self {
+    pub fn sni(mut self, server_name: ServerName<'static>) -> Self {
         self.sni.replace(server_name);
         self
     }
@@ -106,13 +106,15 @@ impl TlsStreamPoolBuilder {
 
         let sni = match sni {
             None => match &addr {
-                Address::Direct(addr) => ServerName::IpAddress(addr.ip()),
+                Address::Direct(addr) => ServerName::from(addr.ip()),
                 Address::Domain(domain, _) => {
                     let domain = domain.as_ref();
-                    ServerName::try_from(domain).map_err(|e| {
-                        error!("cannot generate sni from '{}': {}", domain, e);
-                        CapybaraError::InvalidTlsSni(domain.to_string().into())
-                    })?
+                    ServerName::try_from(domain)
+                        .map_err(|e| {
+                            error!("cannot generate sni from '{}': {}", domain, e);
+                            CapybaraError::InvalidTlsSni(domain.to_string().into())
+                        })?
+                        .to_owned()
                 }
             },
             Some(sni) => sni,
@@ -208,7 +210,7 @@ pub struct Manager {
     resolver: Arc<dyn Resolver>,
     buff_size: usize,
     timeout: Option<Duration>,
-    sni: ServerName,
+    sni: ServerName<'static>,
 }
 
 impl Addressable for Manager {

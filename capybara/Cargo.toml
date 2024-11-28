@@ -10,7 +10,7 @@ pretty_env_logger = "0.5.0"
 capybara-core = { path = "../capybara-core" }
 capybara-etc = { path = "../capybara-etc" }
 capybara-util = { path = "../capybara-util" }
-mimalloc = { version = "0.1.42", default-features = false }
+mimalloc = { version = "0.1.43", default-features = false }
 log = "0.4.21"
 anyhow = "1.0.86"
 cfg-if = "1.0.0"
@@ -24,6 +24,6 @@ async-trait = "0.1.74"
 ahash = "0.8.11"
 pretty_env_logger = "0.5.0"
 dirs = "5.0.1"
-hashbrown = { version = "0.14.5", features = ["serde"] }
+hashbrown = { version = "0.15.2", features = ["serde"] }
 duration-str = "0.11.2"
 liquid = "0.26.9"

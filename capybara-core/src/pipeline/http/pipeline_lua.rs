@@ -30,15 +30,15 @@ bitflags! {
 struct LuaJsonModule;
 
 impl UserData for LuaJsonModule {
-    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("encode", |lua, _, value: mlua::Value| {
             let mut b = smallvec::SmallVec::<[u8; 512]>::new();
             serde_json::to_writer(&mut b, &value).map_err(mlua::Error::external)?;
             lua.create_string(&b[..])
         });
         methods.add_method("decode", |lua, _, input: LuaString| {
-            let s = input.to_str()?;
-            let v = serde_json::from_str::<serde_json::Value>(s).map_err(mlua::Error::external)?;
+            let v = serde_json::from_str::<serde_json::Value>(input.to_str()?.as_ref())
+                .map_err(mlua::Error::external)?;
             lua.to_value(&v)
         });
     }
@@ -47,14 +47,15 @@ impl UserData for LuaJsonModule {
 struct LuaUrlEncodingModule;
 
 impl UserData for LuaUrlEncodingModule {
-    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("decode", |lua, this, value: LuaString| {
-            let b = urlencoding::decode_binary(value.as_bytes());
+            let b = value.as_bytes();
+            let b = urlencoding::decode_binary(&b);
             lua.create_string(b)
         });
         methods.add_method("encode", |lua, _, value: LuaString| {
             let b = value.as_bytes();
-            let encoded = urlencoding::encode_binary(b);
+            let encoded = urlencoding::encode_binary(&b);
             lua.create_string(encoded.as_bytes())
         });
     }
@@ -63,21 +64,21 @@ impl UserData for LuaUrlEncodingModule {
 struct LuaLogger;
 
 impl UserData for LuaLogger {
-    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("debug", |lua, this, message: LuaString| {
-            debug!("{}", message.to_string_lossy());
+            debug!("{}", message.to_str()?.as_ref());
             Ok(())
         });
         methods.add_method("info", |lua, this, message: LuaString| {
-            info!("{}", message.to_string_lossy());
+            info!("{}", message.to_str()?.as_ref());
             Ok(())
         });
         methods.add_method("warn", |lua, this, message: LuaString| {
-            warn!("{}", message.to_string_lossy());
+            warn!("{}", message.to_str()?.as_ref());
             Ok(())
         });
         methods.add_method("error", |lua, this, message: LuaString| {
-            error!("{}", message.to_string_lossy());
+            error!("{}", message.to_str()?.as_ref());
             Ok(())
         });
     }
@@ -94,7 +95,7 @@ struct LuaResponse {
 struct LuaHttpRequestContext(*mut HttpContext);
 
 impl UserData for LuaHttpRequestContext {
-    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("client_addr", |_, this, ()| {
             let ctx = unsafe { this.0.as_mut() }.unwrap();
             Ok(ctx.client_addr().to_string())
@@ -204,7 +205,7 @@ impl UserData for LuaHttpRequestContext {
 struct LuaHttpResponseContext(*mut HttpContext);
 
 impl UserData for LuaHttpResponseContext {
-    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("client_addr", |_, this, ()| {
             let ctx = unsafe { this.0.as_mut() }.unwrap();
             Ok(ctx.client_addr().to_string())
@@ -248,7 +249,7 @@ impl UserData for LuaHttpResponseContext {
 struct LuaRequestLine(*mut RequestLine);
 
 impl UserData for LuaRequestLine {
-    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("uri", |lua, this, ()| {
             let request_line = unsafe { this.0.as_mut() }.unwrap();
             let uri = request_line.uri();
@@ -286,7 +287,7 @@ impl UserData for LuaRequestLine {
 struct LuaStatusLine(*mut StatusLine);
 
 impl UserData for LuaStatusLine {
-    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("status_code", |_, this, ()| {
             let status_line = unsafe { this.0.as_mut() }.unwrap();
             Ok(status_line.status_code())
@@ -305,16 +306,16 @@ impl UserData for LuaStatusLine {
 struct LuaHeaders(*mut Headers);
 
 impl UserData for LuaHeaders {
-    fn add_methods<'lua, M: UserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("has", |_, this, name: LuaString| {
             let headers = unsafe { this.0.as_mut() }.unwrap();
-            let name = name.to_str()?;
-            Ok(headers.position(name).is_some())
+            let name = name.to_string_lossy();
+            Ok(headers.position(&name).is_some())
         });
 
         methods.add_method("get", |lua, this, name: LuaString| {
             let headers = unsafe { this.0.as_mut() }.unwrap();
-            match headers.get_bytes(name.to_str()?) {
+            match headers.get_bytes(name.to_str()?.as_ref()) {
                 None => Ok(None),
                 Some(b) => lua.create_string(b).map(Some),
             }
@@ -344,8 +345,7 @@ impl UserData for LuaHeaders {
 
         methods.add_method("gets", |lua, this, name: LuaString| {
             let headers = unsafe { this.0.as_mut() }.unwrap();
-            let positions =
-                headers.positions(unsafe { std::str::from_utf8_unchecked(name.as_ref()) });
+            let positions = headers.positions(name.to_str()?.as_ref());
             if positions.is_empty() {
                 return Ok(None);
             }
@@ -376,12 +376,12 @@ impl HttpPipeline for LuaHttpPipeline {
             let vm = self.vm.lock().await;
             let globals = vm.globals();
 
-            let handler = globals.get::<_, Function>("handle_request_line");
+            let handler = globals.get::<Function>("handle_request_line");
             if let Ok(fun) = handler {
                 vm.scope(|scope| {
                     let ctx = scope.create_userdata(LuaHttpRequestContext(ctx))?;
                     let request_line = scope.create_userdata(LuaRequestLine(request_line))?;
-                    fun.call::<_, Option<LuaValue>>((ctx, request_line))?;
+                    fun.call::<Option<LuaValue>>((ctx, request_line))?;
                     Ok(())
                 })?;
             }
@@ -401,12 +401,12 @@ impl HttpPipeline for LuaHttpPipeline {
         {
             let vm = self.vm.lock().await;
             let globals = vm.globals();
-            let handler = globals.get::<_, Function>("handle_request_headers");
+            let handler = globals.get::<Function>("handle_request_headers");
             if let Ok(fun) = handler {
                 vm.scope(|scope| {
                     let ctx = scope.create_userdata(LuaHttpRequestContext(ctx))?;
                     let headers = scope.create_userdata(LuaHeaders(headers))?;
-                    fun.call::<_, Option<LuaValue>>((ctx, headers))?;
+                    fun.call::<Option<LuaValue>>((ctx, headers))?;
                     Ok(())
                 })?;
             }
@@ -426,12 +426,12 @@ impl HttpPipeline for LuaHttpPipeline {
         {
             let vm = self.vm.lock().await;
             let globals = vm.globals();
-            let handler = globals.get::<_, Function>("handle_status_line");
+            let handler = globals.get::<Function>("handle_status_line");
             if let Ok(fun) = handler {
                 vm.scope(|scope| {
                     let ctx = scope.create_userdata(LuaHttpResponseContext(ctx))?;
                     let status_line = scope.create_userdata(LuaStatusLine(status_line))?;
-                    fun.call::<_, Option<LuaValue>>((ctx, status_line))?;
+                    fun.call::<Option<LuaValue>>((ctx, status_line))?;
                     Ok(())
                 })?;
             }
@@ -450,12 +450,12 @@ impl HttpPipeline for LuaHttpPipeline {
         {
             let vm = self.vm.lock().await;
             let globals = vm.globals();
-            let handler = globals.get::<_, Function>("handle_response_headers");
+            let handler = globals.get::<Function>("handle_response_headers");
             if let Ok(fun) = handler {
                 vm.scope(|scope| {
                     let ctx = scope.create_userdata(LuaHttpResponseContext(ctx))?;
                     let headers = scope.create_userdata(LuaHeaders(headers))?;
-                    fun.call::<_, Option<LuaValue>>((ctx, headers))?;
+                    fun.call::<Option<LuaValue>>((ctx, headers))?;
                     Ok(())
                 })?;
             }
@@ -499,7 +499,7 @@ impl TryFrom<&PipelineConf> for LuaHttpPipelineFactory {
         {
             Value::String(s) => {
                 let (vm, flags) = {
-                    let vm = Lua::new();
+                    let vm = unsafe { Lua::unsafe_new() };
                     vm.load(s).exec()?;
                     let mut flags = LuaHttpPipelineFlags::default();
 
@@ -512,19 +512,16 @@ impl TryFrom<&PipelineConf> for LuaHttpPipelineFactory {
                         globals.set("logger", LuaLogger)?;
 
                         // check functions
-                        if globals.get::<_, Function>("handle_request_line").is_ok() {
+                        if globals.get::<Function>("handle_request_line").is_ok() {
                             flags |= LuaHttpPipelineFlags::HANDLE_REQUEST_LINE;
                         }
-                        if globals.get::<_, Function>("handle_request_headers").is_ok() {
+                        if globals.get::<Function>("handle_request_headers").is_ok() {
                             flags |= LuaHttpPipelineFlags::HANDLE_REQUEST_HEADERS;
                         }
-                        if globals.get::<_, Function>("handle_status_line").is_ok() {
+                        if globals.get::<Function>("handle_status_line").is_ok() {
                             flags |= LuaHttpPipelineFlags::HANDLE_STATUS_LINE;
                         }
-                        if globals
-                            .get::<_, Function>("handle_response_headers")
-                            .is_ok()
-                        {
+                        if globals.get::<Function>("handle_response_headers").is_ok() {
                             flags |= LuaHttpPipelineFlags::HANDLE_RESPONSE_HEADERS;
                         }
                     }
@@ -610,7 +607,7 @@ end
         "#;
 
         let vm = {
-            let vm = Lua::new();
+            let vm = unsafe { Lua::unsafe_new() };
             vm.load(script).exec()?;
             Arc::new(Mutex::new(vm))
         };

@@ -1,7 +1,7 @@
-use std::fmt::{self, Formatter};
-
 use bytes::Bytes;
 use smallvec::{smallvec, SmallVec};
+use std::fmt::{self, Formatter};
+use std::ops::Deref;
 use strum_macros::{EnumIter, FromRepr};
 
 use super::hpack::Headers;
@@ -46,6 +46,20 @@ impl Metadata {
 
     pub fn stream_id(&self) -> u32 {
         read_u32(&self.0[5..])
+    }
+}
+
+impl Deref for Metadata {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+
+impl AsRef<[u8]> for Metadata {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -151,6 +165,10 @@ impl fmt::Display for FrameKind {
 pub struct Priority(pub(crate) Bytes);
 
 impl Priority {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn exclusive(&self) -> bool {
         self.0[0] & 0x80 != 0
     }
@@ -161,6 +179,20 @@ impl Priority {
 
     pub fn weight(&self) -> u8 {
         self.0[4]
+    }
+}
+
+impl Deref for Priority {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+
+impl AsRef<[u8]> for Priority {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -180,8 +212,25 @@ impl fmt::Debug for Priority {
 pub struct RstStream(pub(crate) Bytes);
 
 impl RstStream {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
     pub fn error_code(&self) -> u32 {
         read_u32(&self.0[..])
+    }
+}
+
+impl Deref for RstStream {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+
+impl AsRef<[u8]> for RstStream {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -195,8 +244,26 @@ impl fmt::Debug for RstStream {
 pub struct Settings(pub(crate) Bytes);
 
 impl Settings {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (Identifier, u32)> + '_ {
         SettingIter(&self.0[..])
+    }
+}
+
+impl Deref for Settings {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+
+impl AsRef<[u8]> for Settings {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -261,8 +328,32 @@ pub enum Identifier {
 pub struct WindowUpdate(pub(crate) Bytes);
 
 impl WindowUpdate {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn window_size_increment(&self) -> u32 {
         read_u32(&self.0[..])
+    }
+}
+
+impl Deref for WindowUpdate {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+
+impl Into<Bytes> for WindowUpdate {
+    fn into(self) -> Bytes {
+        self.0
+    }
+}
+
+impl AsRef<[u8]> for WindowUpdate {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -276,8 +367,25 @@ impl fmt::Debug for WindowUpdate {
 pub struct Ping(pub(crate) Bytes);
 
 impl Ping {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
     pub fn opaque_data(&self) -> u64 {
         read_u64(&self.0[..])
+    }
+}
+
+impl Deref for Ping {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+
+impl AsRef<[u8]> for Ping {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 

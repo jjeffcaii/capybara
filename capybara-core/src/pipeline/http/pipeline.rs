@@ -252,6 +252,11 @@ impl HttpContext {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn fake() -> HttpContext {
+        HttpContext::builder("127.0.0.1:12345".parse().unwrap()).build()
+    }
+
     #[inline]
     pub fn id(&self) -> u64 {
         self.id

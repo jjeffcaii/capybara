@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fmt::Formatter;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
@@ -94,8 +95,26 @@ static STATIC_TABLE_ENTRIES: Lazy<Vec<Arc<HeaderField>>> = Lazy::new(|| {
 pub struct Headers(pub(crate) Bytes);
 
 impl Headers {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = Result<Arc<HeaderField>, CapybaraError>> + '_ {
         HeaderFieldIter { b: &self.0[..] }
+    }
+}
+
+impl Deref for Headers {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..]
+    }
+}
+
+impl AsRef<[u8]> for Headers {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 

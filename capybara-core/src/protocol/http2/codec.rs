@@ -1,5 +1,6 @@
 use bytes::{Buf, BytesMut};
-use tokio_util::codec::Decoder;
+use garde::rules::length::HasSimpleLength;
+use tokio_util::codec::{Decoder, Encoder};
 
 use super::frame::{Frame, FrameKind, Metadata, Ping, Priority, RstStream, Settings, WindowUpdate};
 use super::hpack::Headers;
@@ -50,6 +51,77 @@ impl Http2Codec {
             FrameKind::WindowUpdate => Frame::WindowUpdate(metadata, WindowUpdate(b)),
             FrameKind::Continuation => Frame::Continuation(metadata, b),
         }
+    }
+}
+
+impl Encoder<&Frame> for Http2Codec {
+    type Error = anyhow::Error;
+
+    fn encode(&mut self, item: &Frame, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        match item {
+            Frame::Magic => {
+                dst.reserve(MAGIC.len());
+                dst.extend_from_slice(&MAGIC[..]);
+            }
+            Frame::Data(metadata, payload) => {
+                dst.reserve(METADATA_SIZE + payload.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(&payload[..]);
+            }
+            Frame::Settings(metadata, payload) => {
+                let b = &payload[..];
+                dst.reserve(METADATA_SIZE + b.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(b);
+            }
+            Frame::Headers(metadata, payload) => {
+                let b = &payload[..];
+                dst.reserve(METADATA_SIZE + b.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(b);
+            }
+            Frame::Priority(metadata, payload) => {
+                let b = &payload[..];
+                dst.reserve(METADATA_SIZE + b.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(b);
+            }
+            Frame::RstStream(metadata, payload) => {
+                let b = &payload[..];
+                dst.reserve(METADATA_SIZE + b.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(b);
+            }
+            Frame::Ping(metadata, payload) => {
+                let b = &payload[..];
+                dst.reserve(METADATA_SIZE + payload.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(b);
+            }
+            Frame::Goaway(metadata, payload) => {
+                dst.reserve(METADATA_SIZE + payload.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(&payload[..]);
+            }
+            Frame::WindowUpdate(metadata, payload) => {
+                let b = &payload[..];
+                dst.reserve(METADATA_SIZE + b.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(b);
+            }
+            Frame::Continuation(metadata, payload) => {
+                dst.reserve(METADATA_SIZE + payload.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(&payload[..]);
+            }
+            Frame::PushPromise(metadata, payload) => {
+                dst.reserve(METADATA_SIZE + payload.len());
+                dst.extend_from_slice(&metadata[..]);
+                dst.extend_from_slice(&payload[..]);
+            }
+        }
+
+        Ok(())
     }
 }
 

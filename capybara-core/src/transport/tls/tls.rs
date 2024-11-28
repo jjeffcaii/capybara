@@ -3,67 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use rustls::OwnedTrustAnchor;
-use tokio_rustls::rustls::{Certificate, PrivateKey};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::TlsConnector;
 
 use crate::CapybaraError;
-
-#[inline]
-fn load_keys(source: Source) -> Result<PrivateKey> {
-    let keys = match source {
-        Source::Content(key) => read_keys(key.as_bytes())?,
-        Source::Path(path) => {
-            let c = std::fs::read(path)?;
-            read_keys(&c[..])?
-        }
-    };
-    Ok(keys)
-}
-
-#[inline]
-fn read_keys(b: &[u8]) -> Result<PrivateKey> {
-    let mut r = BufReader::new(b);
-    loop {
-        match rustls_pemfile::read_one(&mut r)? {
-            Some(rustls_pemfile::Item::RSAKey(key)) => {
-                return Ok(PrivateKey(key));
-            }
-            Some(rustls_pemfile::Item::PKCS8Key(key)) => {
-                return Ok(PrivateKey(key));
-            }
-            None => break,
-            _ => (),
-        }
-    }
-    bail!("no keys found")
-}
-
-#[inline]
-fn read_certs(b: &[u8]) -> Result<Vec<Certificate>> {
-    let mut r = BufReader::new(b);
-
-    let mut certs = vec![];
-    for next in rustls_pemfile::certs(&mut r)? {
-        certs.push(Certificate(next));
-    }
-
-    Ok(certs)
-}
-
-#[inline]
-fn load_certs(source: Source) -> Result<Vec<Certificate>> {
-    let certs = match source {
-        Source::Content(crt) => read_certs(crt.as_bytes())?,
-        Source::Path(path) => {
-            let c = std::fs::read(path)?;
-            read_certs(&c[..])?
-        }
-    };
-    Ok(certs)
-}
 
 enum Source<'a> {
     Content(&'a str),
@@ -102,18 +47,30 @@ impl<'a> TlsAcceptorBuilder<'a> {
     }
 
     pub fn build(self) -> Result<TlsAcceptor> {
+        use rustls::pki_types::CertificateDer;
+
         let Self { crt, key } = self;
         let certs = {
             let source = crt.ok_or_else(|| CapybaraError::InvalidTlsConfig("cert".into()))?;
-            load_certs(source)?
+
+            match source {
+                Source::Content(content) => {
+                    vec![CertificateDer::from_pem_slice(content.as_bytes())?]
+                }
+                Source::Path(path) => {
+                    CertificateDer::pem_file_iter(path)?.collect::<Result<Vec<_>, _>>()?
+                }
+            }
         };
         let keys = {
             let source = key.ok_or_else(|| CapybaraError::InvalidTlsConfig("key".into()))?;
-            load_keys(source)?
+            match source {
+                Source::Content(content) => PrivateKeyDer::from_pem_slice(content.as_bytes())?,
+                Source::Path(path) => PrivateKeyDer::from_pem_file(path)?,
+            }
         };
 
         let config = rustls::ServerConfig::builder()
-            .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(certs, keys)
             .map_err(|err| CapybaraError::MalformedTlsConfig(err.into()))?;
@@ -160,24 +117,24 @@ impl<'a> TlsConnectorBuilder<'a> {
 
         let mut root_cert_store = RootCertStore::empty();
 
-        if let Some(crt) = crt {
-            let certs = load_certs(crt)?;
+        // add system ca
+        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-            for next in certs {
-                root_cert_store.add(&next)?;
-            }
+        // add custom ca
+        if let Some(crt) = crt {
+            match crt {
+                Source::Content(content) => {
+                    root_cert_store.add(CertificateDer::from_pem_slice(content.as_bytes())?)?;
+                }
+                Source::Path(path) => {
+                    for cert in CertificateDer::pem_file_iter(path)? {
+                        root_cert_store.add(cert?)?;
+                    }
+                }
+            };
         }
 
-        root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|it| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                it.subject,
-                it.spki,
-                it.name_constraints,
-            )
-        }));
-
         let config = ClientConfig::builder()
-            .with_safe_defaults()
             .with_root_certificates(root_cert_store)
             .with_no_client_auth();
 
@@ -188,11 +145,10 @@ impl<'a> TlsConnectorBuilder<'a> {
 
 #[cfg(test)]
 mod tls_tests {
-
     use std::net::SocketAddr;
 
     use bytes::BytesMut;
-    use rustls::ServerName;
+    use rustls::pki_types::ServerName;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 

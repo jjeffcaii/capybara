@@ -10,7 +10,7 @@ use bytes::Bytes;
 use deadpool::managed::Manager;
 use futures::{Stream, StreamExt};
 use once_cell::sync::Lazy;
-use rustls::ServerName;
+use rustls::pki_types::ServerName;
 use smallvec::SmallVec;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf};
 use tokio::sync::Notify;

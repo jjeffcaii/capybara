@@ -26,7 +26,7 @@ static RESOLVER: Lazy<AsyncResolver<TokioConnectionProvider>> = Lazy::new(|| {
     if let Ok(s) = std::env::var("CAPYBARA_DNS") {
         let mut nsc = vec![];
         for next in s
-            .split(|b| matches!(b, ';' | ','))
+            .split([';', ','])
             .map(|it| it.trim())
             .filter(|it| !it.is_empty())
         {
