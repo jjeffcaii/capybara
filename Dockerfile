@@ -3,7 +3,7 @@ WORKDIR /usr/src/capybara
 COPY . .
 
 RUN cargo build --release && \
-    cp target/release/capybara /usr/local/cargo/bin/capybara && \
+    cp target/release/capybara-bin /usr/local/cargo/bin/capybara && \
     cargo clean
 
 FROM ubuntu:jammy
