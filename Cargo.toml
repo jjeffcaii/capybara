@@ -5,7 +5,7 @@ lto = "thin"
 resolver = "2"
 
 members = [
-    "capybara",
+    "capybara-bin",
     "capybara-core",
     "capybara-etc",
     "capybara-util",
