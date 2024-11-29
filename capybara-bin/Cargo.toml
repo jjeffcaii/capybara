@@ -1,6 +1,6 @@
 [package]
 name = "capybara-bin"
-version = "0.0.1-alpha.1"
+version = "0.0.1-alpha.2"
 edition = "2021"
 license = "MIT"
 readme = "README.md"
@@ -16,9 +16,9 @@ include = [
 pretty_env_logger = "0.5.0"
 
 [dependencies]
-capybara-core = "0.0.1-alpha.1"
-capybara-etc = "0.0.1-alpha.1"
-capybara-util = "0.0.1-alpha.1"
+capybara-core = { path = "../capybara-core" }
+capybara-etc = { path = "../capybara-etc" }
+capybara-util = { path = "../capybara-util" }
 mimalloc = { version = "0.1.43", default-features = false }
 log = "0.4.21"
 anyhow = "1.0.86"

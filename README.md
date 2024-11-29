@@ -4,6 +4,8 @@
 
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/jjeffcaii/capybara/rust.yml)
 [![Codecov](https://img.shields.io/codecov/c/github/jjeffcaii/capybara)](https://app.codecov.io/gh/jjeffcaii/capybara)
+[![Crates.io Version](https://img.shields.io/crates/v/capybara-bin)](https://crates.io/crates/capybara-bin)
+[![Crates.io Total Downloads](https://img.shields.io/crates/d/capybara-bin)](https://crates.io/crates/capybara-bin)
 ![GitHub Tag](https://img.shields.io/github/v/tag/jjeffcaii/capybara)
 ![GitHub License](https://img.shields.io/github/license/jjeffcaii/capybara)
 
