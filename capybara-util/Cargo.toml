@@ -3,6 +3,15 @@ name = "capybara-util"
 version = "0.0.1-alpha.1"
 edition = "2021"
 build = "build.rs"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/jjeffcaii/capybara"
+homepage = "https://github.com/jjeffcaii/capybara"
+description = "A reverse proxy in Rust, which is inspired from Nginx/OpenResty/Envoy."
+include = [
+    "**/*.rs",
+    "Cargo.toml",
+]
 
 [build-dependencies]
 string_cache_codegen = "0.5"

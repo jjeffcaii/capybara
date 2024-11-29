@@ -23,21 +23,25 @@ jobs:
           override: true
 
       - name: Publish capybara-util
+        if: always()
         run: cargo publish --token ${CRATES_TOKEN} -p capybara-util
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Publish capybara-etc
+        if: always()
         run: cargo publish --token ${CRATES_TOKEN} -p capybara-etc
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Publish capybara-core
+        if: always()
         run: cargo publish --token ${CRATES_TOKEN} -p capybara-core
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
       - name: Publish capybara
+        if: always()
         run: cargo publish --token ${CRATES_TOKEN} -p capybara
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
