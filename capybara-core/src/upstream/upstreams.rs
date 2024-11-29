@@ -3,12 +3,13 @@ use std::sync::Arc;
 use anyhow::Result;
 use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
+use rustls::pki_types::ServerName;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 
 use capybara_util::cachestr::Cachestr;
 
-use crate::proto::UpstreamKey;
+use crate::proto::{Addr, UpstreamKey};
 use crate::resolver::{Resolver, DEFAULT_RESOLVER};
 use crate::transport::{tcp, tls};
 use crate::upstream::Pools;
@@ -104,43 +105,47 @@ impl Upstreams {
         let closer = Clone::clone(&self.closer);
 
         let pool = match k {
-            UpstreamKey::Tcp(addr) => {
-                let p = tcp::TcpStreamPoolBuilder::with_addr(*addr)
-                    .build(closer)
-                    .await?;
-                Pool::Tcp(p)
-            }
-            UpstreamKey::Tls(addr, sni) => {
-                let p = tls::TlsStreamPoolBuilder::with_addr(*addr)
-                    .sni(Clone::clone(sni))
-                    .build(closer)
-                    .await?;
-                Pool::Tls(p)
-            }
-            UpstreamKey::TcpHP(host, port) => {
-                let resolver = match &self.resolver {
-                    None => Clone::clone(&*DEFAULT_RESOLVER),
-                    Some(resolver) => Clone::clone(resolver),
-                };
+            UpstreamKey::Tcp(addr) => match addr {
+                Addr::SocketAddr(addr) => {
+                    let p = tcp::TcpStreamPoolBuilder::with_addr(*addr)
+                        .build(closer)
+                        .await?;
+                    Pool::Tcp(p)
+                }
+                Addr::Host(host, port) => {
+                    let resolver = match &self.resolver {
+                        None => Clone::clone(&*DEFAULT_RESOLVER),
+                        Some(resolver) => Clone::clone(resolver),
+                    };
 
-                let p = tcp::TcpStreamPoolBuilder::with_domain(host.as_ref(), *port)
-                    .resolver(resolver)
-                    .build(closer)
-                    .await?;
-                Pool::Tcp(p)
-            }
-            UpstreamKey::TlsHP(host, port, sni) => {
-                let resolver = match &self.resolver {
-                    None => Clone::clone(&*DEFAULT_RESOLVER),
-                    Some(resolver) => Clone::clone(resolver),
-                };
-
-                let p = tls::TlsStreamPoolBuilder::with_domain(host.as_ref(), *port)
-                    .resolver(resolver)
-                    .build(closer)
-                    .await?;
-                Pool::Tls(p)
-            }
+                    let p = tcp::TcpStreamPoolBuilder::with_domain(host.as_ref(), *port)
+                        .resolver(resolver)
+                        .build(closer)
+                        .await?;
+                    Pool::Tcp(p)
+                }
+            },
+            UpstreamKey::Tls(addr) => match addr {
+                Addr::SocketAddr(addr) => {
+                    let sni = ServerName::from(addr.ip());
+                    let p = tls::TlsStreamPoolBuilder::with_addr(*addr)
+                        .sni(sni)
+                        .build(closer)
+                        .await?;
+                    Pool::Tls(p)
+                }
+                Addr::Host(host, port) => {
+                    let resolver = match &self.resolver {
+                        None => Clone::clone(&*DEFAULT_RESOLVER),
+                        Some(resolver) => Clone::clone(resolver),
+                    };
+                    let p = tls::TlsStreamPoolBuilder::with_domain(host.as_ref(), *port)
+                        .resolver(resolver)
+                        .build(closer)
+                        .await?;
+                    Pool::Tls(p)
+                }
+            },
             UpstreamKey::Tag(tag) => {
                 bail!("no upstream tag '{}' found", tag.as_ref());
             }

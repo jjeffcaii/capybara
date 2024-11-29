@@ -457,7 +457,7 @@ mod tests {
 
             {
                 use tokio::time;
-                time::sleep(time::Duration::from_millis(123)).await;
+                time::sleep(Duration::from_millis(123)).await;
             }
 
             assert!(p

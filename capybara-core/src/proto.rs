@@ -1,9 +1,8 @@
+use async_trait::async_trait;
+use rustls::pki_types::ServerName;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-
-use async_trait::async_trait;
-use rustls::pki_types::ServerName;
 
 use capybara_util::cachestr::Cachestr;
 
@@ -11,11 +10,59 @@ use crate::{CapybaraError, Result};
 
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub enum UpstreamKey {
-    Tcp(SocketAddr),
-    Tls(SocketAddr, ServerName<'static>),
-    TcpHP(Cachestr, u16),
-    TlsHP(Cachestr, u16, ServerName<'static>),
+    Tcp(Addr),
+    Tls(Addr),
     Tag(Cachestr),
+}
+
+#[derive(Clone, Hash, Eq, PartialEq)]
+pub enum Addr {
+    SocketAddr(SocketAddr),
+    Host(Cachestr, u16),
+}
+
+impl Addr {
+    fn parse_from(s: &str, default_port: Option<u16>) -> Result<Self> {
+        let (host, port) = host_and_port(s)?;
+
+        let port = match port {
+            None => {
+                default_port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?
+            }
+            Some(port) => port,
+        };
+
+        if let Ok(addr) = host.parse::<IpAddr>() {
+            return Ok(Addr::SocketAddr(SocketAddr::new(addr, port)));
+        }
+
+        Ok(Addr::Host(Cachestr::from(host), port))
+    }
+}
+
+impl Display for Addr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Addr::SocketAddr(addr) => write!(f, "{}", addr),
+            Addr::Host(host, port) => write!(f, "{}:{}", host, port),
+        }
+    }
+}
+
+#[inline]
+fn host_and_port(s: &str) -> Result<(&str, Option<u16>)> {
+    let mut sp = s.splitn(2, ':');
+
+    match sp.next() {
+        None => Err(CapybaraError::InvalidUpstream(s.to_string().into())),
+        Some(first) => match sp.next() {
+            Some(second) => match second.parse::<u16>() {
+                Ok(port) => Ok((first, Some(port))),
+                Err(_) => Err(CapybaraError::InvalidUpstream(s.to_string().into())),
+            },
+            None => Ok((first, None)),
+        },
+    }
 }
 
 impl FromStr for UpstreamKey {
@@ -31,21 +78,6 @@ impl FromStr for UpstreamKey {
             port == 443
         }
 
-        fn host_and_port(s: &str) -> Result<(&str, Option<u16>)> {
-            let mut sp = s.splitn(2, ':');
-
-            match sp.next() {
-                None => Err(CapybaraError::InvalidUpstream(s.to_string().into())),
-                Some(first) => match sp.next() {
-                    Some(second) => match second.parse::<u16>() {
-                        Ok(port) => Ok((first, Some(port))),
-                        Err(_) => Err(CapybaraError::InvalidUpstream(s.to_string().into())),
-                    },
-                    None => Ok((first, None)),
-                },
-            }
-        }
-
         fn to_sni(sni: &str) -> Result<ServerName<'static>> {
             ServerName::try_from(sni)
                 .map_err(|_| CapybaraError::InvalidTlsSni(sni.to_string().into()))
@@ -53,7 +85,6 @@ impl FromStr for UpstreamKey {
         }
 
         // FIXME: too many duplicated codes
-
         if let Some(suffix) = s.strip_prefix("upstream://") {
             return if suffix.is_empty() {
                 Err(CapybaraError::InvalidUpstream(s.to_string().into()))
@@ -63,53 +94,33 @@ impl FromStr for UpstreamKey {
         }
 
         if let Some(suffix) = s.strip_prefix("tcp://") {
-            let (host, port) = host_and_port(suffix)?;
-            let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
-            return Ok(match host.parse::<IpAddr>() {
-                Ok(ip) => UpstreamKey::Tcp(SocketAddr::new(ip, port)),
-                Err(_) => UpstreamKey::TcpHP(Cachestr::from(host), port),
-            });
+            let addr = Addr::parse_from(suffix, None)?;
+            return Ok(UpstreamKey::Tcp(addr));
         }
 
         if let Some(suffix) = s.strip_prefix("tls://") {
-            let (host, port) = host_and_port(suffix)?;
-            let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
-            return Ok(match host.parse::<IpAddr>() {
-                Ok(ip) => {
-                    let server_name = ServerName::from(ip);
-                    UpstreamKey::Tls(SocketAddr::new(ip, port), server_name)
-                }
-                Err(_) => UpstreamKey::TlsHP(Cachestr::from(host), port, to_sni(host)?),
-            });
+            let addr = Addr::parse_from(suffix, Some(443))?;
+            return Ok(UpstreamKey::Tls(addr));
         }
 
         if let Some(suffix) = s.strip_prefix("http://") {
-            let (host, port) = host_and_port(suffix)?;
-            let port = port.unwrap_or(80);
-            return Ok(match host.parse::<IpAddr>() {
-                Ok(ip) => UpstreamKey::Tcp(SocketAddr::new(ip, port)),
-                Err(_) => UpstreamKey::TcpHP(Cachestr::from(host), port),
-            });
+            let addr = Addr::parse_from(suffix, Some(80))?;
+            return Ok(UpstreamKey::Tcp(addr));
         }
 
         if let Some(suffix) = s.strip_prefix("https://") {
-            let (host, port) = host_and_port(suffix)?;
-            let port = port.unwrap_or(443);
-            return Ok(match host.parse::<IpAddr>() {
-                Ok(ip) => {
-                    let server_name = ServerName::from(ip);
-                    UpstreamKey::Tls(SocketAddr::new(ip, port), server_name)
-                }
-                Err(_) => UpstreamKey::TlsHP(Cachestr::from(host), port, to_sni(host)?),
-            });
+            let addr = Addr::parse_from(suffix, Some(443))?;
+            return Ok(UpstreamKey::Tls(addr));
         }
 
         let (host, port) = host_and_port(s)?;
         let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
-        Ok(match host.parse::<IpAddr>() {
-            Ok(ip) => UpstreamKey::Tcp(SocketAddr::new(ip, port)),
-            Err(_) => UpstreamKey::TcpHP(Cachestr::from(host), port),
-        })
+        let addr = match host.parse::<IpAddr>() {
+            Ok(ip) => Addr::SocketAddr(SocketAddr::new(ip, port)),
+            Err(_) => Addr::Host(Cachestr::from(host), port),
+        };
+
+        Ok(UpstreamKey::Tcp(addr))
     }
 }
 
@@ -117,20 +128,8 @@ impl Display for UpstreamKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             UpstreamKey::Tcp(addr) => write!(f, "tcp://{}", addr),
-            UpstreamKey::Tls(addr, sni) => {
-                if let ServerName::DnsName(name) = sni {
-                    return write!(f, "tls://{}?sni={}", addr, name.as_ref());
-                }
-                write!(f, "tls://{}", addr)
-            }
-            UpstreamKey::TcpHP(addr, port) => write!(f, "tcp://{}:{}", addr, port),
-            UpstreamKey::TlsHP(addr, port, sni) => {
-                if let ServerName::DnsName(name) = sni {
-                    return write!(f, "tls://{}:{}?sni={}", addr, port, name.as_ref());
-                }
-                write!(f, "tls://{}:{}", addr, port)
-            }
-            UpstreamKey::Tag(tag) => write!(f, "upstream://{}", tag.as_ref()),
+            UpstreamKey::Tls(addr) => write!(f, "tls://{}", addr),
+            UpstreamKey::Tag(tag) => write!(f, "upstream://{}", tag),
         }
     }
 }
@@ -182,18 +181,12 @@ mod tests {
             ("https://127.0.0.1:8443", "tls://127.0.0.1:8443"),
             // schema+host
             ("http://example.com", "tcp://example.com:80"),
-            (
-                "https://example.com",
-                "tls://example.com:443?sni=example.com",
-            ),
+            ("https://example.com", "tls://example.com:443"),
             // schema+host+port
             ("tcp://localhost:8080", "tcp://localhost:8080"),
-            ("tls://localhost:8443", "tls://localhost:8443?sni=localhost"),
+            ("tls://localhost:8443", "tls://localhost:8443"),
             ("http://localhost:8080", "tcp://localhost:8080"),
-            (
-                "https://localhost:8443",
-                "tls://localhost:8443?sni=localhost",
-            ),
+            ("https://localhost:8443", "tls://localhost:8443"),
         ] {
             assert!(s.parse::<UpstreamKey>().is_ok_and(|it| {
                 let actual = it.to_string();

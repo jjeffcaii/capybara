@@ -1,12 +1,12 @@
+use rustls::pki_types::ServerName;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
-
 use tokio::net::TcpStream;
 
-use crate::proto::UpstreamKey;
+use crate::proto::{Addr, UpstreamKey};
 use crate::resolver::DEFAULT_RESOLVER;
 use crate::transport::{tcp, tls};
-use crate::Result;
+use crate::{CapybaraError, Result};
 
 pub(crate) enum ClientStream {
     Tcp(TcpStream),
@@ -27,36 +27,48 @@ impl Display for ClientStream {
 
 pub(crate) async fn establish(upstream: &UpstreamKey, buff_size: usize) -> Result<ClientStream> {
     let stream = match upstream {
-        UpstreamKey::Tcp(addr) => ClientStream::Tcp(
-            tcp::TcpStreamBuilder::new(*addr)
-                .buff_size(buff_size)
-                .build()?,
-        ),
-        UpstreamKey::Tls(addr, sni) => {
-            let stream = tcp::TcpStreamBuilder::new(*addr)
-                .buff_size(buff_size)
-                .build()?;
-            let c = tls::TlsConnectorBuilder::new().build()?;
-            ClientStream::Tls(c.connect(Clone::clone(sni), stream).await?)
-        }
-        UpstreamKey::TcpHP(domain, port) => {
-            let ip = resolve(domain.as_ref()).await?;
-            let addr = SocketAddr::new(ip, *port);
-            ClientStream::Tcp(
-                tcp::TcpStreamBuilder::new(addr)
+        UpstreamKey::Tcp(addr) => match addr {
+            Addr::SocketAddr(addr) => ClientStream::Tcp(
+                tcp::TcpStreamBuilder::new(*addr)
                     .buff_size(buff_size)
                     .build()?,
-            )
-        }
-        UpstreamKey::TlsHP(domain, port, sni) => {
-            let ip = resolve(domain.as_ref()).await?;
-            let addr = SocketAddr::new(ip, *port);
-            let stream = tcp::TcpStreamBuilder::new(addr)
-                .buff_size(buff_size)
-                .build()?;
-            let c = tls::TlsConnectorBuilder::new().build()?;
-            let stream = c.connect(Clone::clone(sni), stream).await?;
-            ClientStream::Tls(stream)
+            ),
+            Addr::Host(host, port) => {
+                let ip = resolve(host.as_ref()).await?;
+                let addr = SocketAddr::new(ip, *port);
+                ClientStream::Tcp(
+                    tcp::TcpStreamBuilder::new(addr)
+                        .buff_size(buff_size)
+                        .build()?,
+                )
+            }
+        },
+        UpstreamKey::Tls(addr) => {
+            match addr {
+                Addr::SocketAddr(addr) => {
+                    let stream = tcp::TcpStreamBuilder::new(*addr)
+                        .buff_size(buff_size)
+                        .build()?;
+                    let c = tls::TlsConnectorBuilder::new().build()?;
+
+                    let sni = ServerName::from(addr.ip());
+                    ClientStream::Tls(c.connect(sni, stream).await?)
+                }
+                Addr::Host(host, port) => {
+                    let ip = resolve(host.as_ref()).await?;
+                    let addr = SocketAddr::new(ip, *port);
+                    let stream = tcp::TcpStreamBuilder::new(addr)
+                        .buff_size(buff_size)
+                        .build()?;
+                    let c = tls::TlsConnectorBuilder::new().build()?;
+                    // TODO: how to reduce creating times of sni?
+                    let sni = ServerName::try_from(host.as_ref())
+                        .map_err(|e| CapybaraError::Other(e.into()))?
+                        .to_owned();
+                    let stream = c.connect(sni, stream).await?;
+                    ClientStream::Tls(stream)
+                }
+            }
         }
         UpstreamKey::Tag(tag) => {
             todo!("establish with tag is not supported yet")
