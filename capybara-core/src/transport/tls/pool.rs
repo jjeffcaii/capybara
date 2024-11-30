@@ -13,6 +13,7 @@ use tokio::sync::Notify;
 
 use capybara_util::cachestr::Cachestr;
 
+use super::tls;
 use crate::resolver::Resolver;
 use crate::transport::{tcp, Address, Addressable, TlsConnectorBuilder};
 use crate::{resolver, CapybaraError};
@@ -35,20 +36,7 @@ impl TlsStreamPoolBuilder {
     pub(crate) const BUFF_SIZE: usize = 8192;
     pub(crate) const MAX_SIZE: usize = 128;
 
-    pub fn with_addr(addr: SocketAddr) -> Self {
-        Self::new(Address::Direct(addr))
-    }
-
-    pub fn with_domain<D>(domain: D, port: u16) -> Self
-    where
-        D: AsRef<str>,
-    {
-        let domain = Cachestr::from(domain.as_ref());
-        Self::new(Address::Domain(domain, port))
-    }
-
-    #[inline(always)]
-    fn new(addr: Address) -> Self {
+    pub fn new(addr: Address) -> Self {
         Self {
             addr,
             timeout: None,
@@ -106,16 +94,13 @@ impl TlsStreamPoolBuilder {
 
         let sni = match sni {
             None => match &addr {
-                Address::Direct(addr) => ServerName::from(addr.ip()),
-                Address::Domain(domain, _) => {
-                    let domain = domain.as_ref();
-                    ServerName::try_from(domain)
-                        .map_err(|e| {
-                            error!("cannot generate sni from '{}': {}", domain, e);
-                            CapybaraError::InvalidTlsSni(domain.to_string().into())
-                        })?
-                        .to_owned()
-                }
+                Address::SocketAddr(addr) => ServerName::from(addr.ip()),
+                Address::Host(host, _) => ServerName::try_from(host.as_ref())
+                    .map_err(|e| {
+                        error!("cannot generate sni from '{}': {}", host, e);
+                        CapybaraError::InvalidTlsSni(host.to_string().into())
+                    })?
+                    .to_owned(),
             },
             Some(sni) => sni,
         };
@@ -225,9 +210,9 @@ impl managed::Manager for Manager {
 
     async fn create(&self) -> StdResult<Self::Type, Self::Error> {
         let addr = match &self.addr {
-            Address::Direct(addr) => *addr,
-            Address::Domain(domain, port) => {
-                let addr = self.resolver.resolve_one(domain).await?;
+            Address::SocketAddr(addr) => *addr,
+            Address::Host(host, port) => {
+                let addr = self.resolver.resolve_one(host).await?;
                 SocketAddr::new(addr, *port)
             }
         };
@@ -240,10 +225,9 @@ impl managed::Manager for Manager {
             b.build()?
         };
 
-        let stream: tokio_rustls::client::TlsStream<TcpStream> = {
-            let b = TlsConnectorBuilder::new().build()?;
-            b.connect(Clone::clone(&self.sni), stream).await?
-        };
+        let stream = tls::DEFAULT_CONNECTOR
+            .connect(Clone::clone(&self.sni), stream)
+            .await?;
 
         if log_enabled!(log::Level::Info) {
             let (stream, _) = stream.get_ref();
@@ -268,11 +252,11 @@ impl managed::Manager for Manager {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::proto::Addr;
     use futures::stream::StreamExt;
     use tokio::io::AsyncWriteExt;
     use tokio_util::codec::FramedRead;
-
-    use super::*;
 
     #[tokio::test]
     async fn test_pool() -> Result<()> {
@@ -284,7 +268,7 @@ mod tests {
 
         let closer = Arc::new(Notify::new());
 
-        let pool = TlsStreamPoolBuilder::with_domain("httpbin.org", 443)
+        let pool = TlsStreamPoolBuilder::new(Addr::Host(Cachestr::from("httpbin.org"), 443))
             .max_size(1)
             .build(Clone::clone(&closer))
             .await?;

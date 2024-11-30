@@ -28,9 +28,9 @@ impl From<WeightedResource<Arc<Pool>>> for WeightedPools {
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::Notify;
-
+    use crate::proto::Addr;
     use crate::transport::tcp::TcpStreamPoolBuilder;
+    use tokio::sync::Notify;
 
     use super::*;
 
@@ -46,7 +46,8 @@ mod tests {
 
         let new_pool = |domain: &str| {
             let closer = Clone::clone(&closer);
-            let bu = TcpStreamPoolBuilder::with_domain(domain, 80);
+            let addr = format!("{}:80", domain).parse::<Addr>().unwrap();
+            let bu = TcpStreamPoolBuilder::new(addr);
             async { bu.build(closer).await.map(|it| Arc::new(Pool::Tcp(it))) }
         };
 

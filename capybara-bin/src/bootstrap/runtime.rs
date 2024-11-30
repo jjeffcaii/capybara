@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,13 +6,14 @@ use std::time::Duration;
 use hashbrown::HashMap;
 use tokio::sync::{mpsc, Notify, RwLock};
 
-use capybara_core::proto::{Listener, Signal};
+use capybara_core::logger;
+use capybara_core::proto::{Addr, Listener, Signal};
 use capybara_core::protocol::http::HttpListener;
 use capybara_core::protocol::stream::StreamListener;
 use capybara_core::transport::tcp::TcpStreamPoolBuilder;
 use capybara_core::transport::tls::TlsStreamPoolBuilder;
 use capybara_core::transport::TlsAcceptorBuilder;
-use capybara_core::{CapybaraError, Pool, Pools, RoundRobinPools, WeightedPools};
+use capybara_core::{Pool, Pools, RoundRobinPools, WeightedPools};
 use capybara_etc::{
     BalanceStrategy, Config, ListenerConfig, Properties, TransportKind, UpstreamConfig,
 };
@@ -66,15 +67,15 @@ impl Dispatcher {
 
                     let p = match endpoint.transport.as_ref().unwrap_or(&v.transport) {
                         TransportKind::Tcp => {
+                            let addr = endpoint.addr.parse::<Addr>()?;
+                            let closer = Clone::clone(&self.closer);
                             if endpoint
                                 .tls
                                 .unwrap_or_else(|| endpoint.addr.ends_with(":443"))
                             {
-                                let b = to_tls_stream_pool_builder(&endpoint.addr)?;
-                                Pool::Tls(b.build(Clone::clone(&self.closer)).await?)
+                                Pool::Tls(TlsStreamPoolBuilder::new(addr).build(closer).await?)
                             } else {
-                                let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
-                                Pool::Tcp(b.build(Clone::clone(&self.closer)).await?)
+                                Pool::Tcp(TcpStreamPoolBuilder::new(addr).build(closer).await?)
                             }
                         }
                         TransportKind::Udp => {
@@ -92,17 +93,15 @@ impl Dispatcher {
                 for endpoint in &v.endpoints {
                     let pool = match endpoint.transport.unwrap_or(v.transport) {
                         TransportKind::Tcp => {
+                            let addr = endpoint.addr.parse::<Addr>()?;
+                            let closer = Clone::clone(&self.closer);
                             if endpoint
                                 .tls
                                 .unwrap_or_else(|| endpoint.addr.ends_with(":443"))
                             {
-                                let b = to_tls_stream_pool_builder(&endpoint.addr)?;
-                                let p = b.build(Clone::clone(&self.closer)).await?;
-                                Pool::Tls(p)
+                                Pool::Tls(TlsStreamPoolBuilder::new(addr).build(closer).await?)
                             } else {
-                                let b = to_tcp_stream_pool_builder(&endpoint.addr)?;
-                                let p = b.build(Clone::clone(&self.closer)).await?;
-                                Pool::Tcp(p)
+                                Pool::Tcp(TcpStreamPoolBuilder::new(addr).build(closer).await?)
                             }
                         }
                         TransportKind::Udp => {
@@ -254,48 +253,11 @@ impl Dispatcher {
     }
 }
 
-#[inline]
-fn to_tls_stream_pool_builder(addr: &str) -> anyhow::Result<TlsStreamPoolBuilder> {
-    let mut sp = addr.split(':');
-    if let Some(left) = sp.next() {
-        if let Some(right) = sp.next() {
-            if let Ok(port) = right.parse::<u16>() {
-                if sp.next().is_none() {
-                    return Ok(match left.parse::<IpAddr>() {
-                        Ok(ip) => TlsStreamPoolBuilder::with_addr(SocketAddr::new(ip, port)),
-                        Err(_) => TlsStreamPoolBuilder::with_domain(left, port),
-                    });
-                }
-            }
-        }
-    }
-
-    bail!(CapybaraError::InvalidUpstream(addr.to_string().into()));
-}
-
-#[inline]
-fn to_tcp_stream_pool_builder(addr: &str) -> anyhow::Result<TcpStreamPoolBuilder> {
-    let mut sp = addr.split(':');
-    if let Some(left) = sp.next() {
-        if let Some(right) = sp.next() {
-            if let Ok(port) = right.parse::<u16>() {
-                if sp.next().is_none() {
-                    return Ok(match left.parse::<IpAddr>() {
-                        Ok(ip) => TcpStreamPoolBuilder::with_addr(SocketAddr::new(ip, port)),
-                        Err(_) => TcpStreamPoolBuilder::with_domain(left, port),
-                    });
-                }
-            }
-        }
-    }
-
-    bail!(CapybaraError::InvalidUpstream(addr.to_string().into()));
-}
-
 pub(crate) struct Bootstrap {
     bc: BootstrapConf,
     c: Arc<RwLock<Config>>,
     dispatcher: Arc<RwLock<Dispatcher>>,
+    loggers: Arc<RwLock<HashMap<String, logger::Key>>>,
 }
 
 impl Bootstrap {
@@ -304,9 +266,37 @@ impl Bootstrap {
         w.shutdown().await;
     }
 
-    pub(crate) async fn start(&self) -> anyhow::Result<()> {
-        let (c_tx, mut c_rx) = mpsc::unbounded_channel::<Config>();
+    async fn generate_loggers(&self) -> anyhow::Result<()> {
+        let mut loggers: HashMap<String, logger::Key> = Default::default();
+        let mut has_main = false;
+        for (k, v) in &self.bc.loggers {
+            if k == "main" {
+                has_main = true;
+                logger::init_global(v)?;
+            } else {
+                let lk = logger::register(v)?;
+                loggers.insert(Clone::clone(k), lk);
+            }
+        }
 
+        // use default logger settings if no main logger found
+        if !has_main {
+            logger::init_global(&logger::Config::default())?;
+        }
+
+        // extend loggers
+        {
+            let mut w = self.loggers.write().await;
+            w.extend(loggers);
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn start(&self) -> anyhow::Result<()> {
+        self.generate_loggers().await?;
+
+        let (c_tx, mut c_rx) = mpsc::unbounded_channel::<Config>();
         {
             let dispatcher = Clone::clone(&self.dispatcher);
             let c = Clone::clone(&self.c);
@@ -428,6 +418,7 @@ impl From<BootstrapConf> for Bootstrap {
             bc: value,
             c: Default::default(),
             dispatcher: Default::default(),
+            loggers: Default::default(),
         }
     }
 }

@@ -26,7 +26,7 @@ pub type Result<T> = std::result::Result<T, CapybaraError>;
 
 mod builtin;
 mod error;
-mod logger;
+pub mod logger;
 mod macros;
 pub mod pipeline;
 pub mod proto;

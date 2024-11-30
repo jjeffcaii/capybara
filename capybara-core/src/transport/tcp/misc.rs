@@ -281,7 +281,7 @@ mod tests {
 
         let to_addr = |s: &str| s.parse::<SocketAddr>().unwrap();
 
-        let laddr = to_addr("0.0.0.0:12345");
+        let laddr = to_addr("0.0.0.0:54321");
 
         let s1 = {
             let addr = to_addr("223.5.5.5:53");

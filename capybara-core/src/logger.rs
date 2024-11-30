@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use bytesize::ByteSize;
@@ -104,7 +104,7 @@ impl Default for Config {
             level: Default::default(),
             stdout: true,
             file: None,
-            line_num: false,
+            line_num: true,
             noh: false,
             chan_size: None,
             overflow: None,
@@ -222,8 +222,16 @@ fn new_logger(c: &Config) -> anyhow::Result<Option<Logger>> {
 
             match &c.file {
                 Some(fc) => {
-                    let path = Path::new(&fc.path);
+                    // normalize path
+                    let path = match &fc.path.strip_prefix("~/") {
+                        Some(rel) => {
+                            let pb = PathBuf::from(rel);
+                            dirs::home_dir().unwrap_or_default().join(pb)
+                        }
+                        None => PathBuf::from(&fc.path),
+                    };
 
+                    // ensure logger dir
                     if let Some(dir) = path.parent() {
                         std::fs::create_dir_all(dir)?;
                     }

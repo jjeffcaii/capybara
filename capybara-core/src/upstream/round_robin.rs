@@ -57,7 +57,8 @@ mod tests {
 
         let mut v = vec![];
         for next in ["httpbin.org", "httpbingo.org"] {
-            let p = TcpStreamPoolBuilder::with_domain(next, 80)
+            let addr = format!("{}:80", next).parse()?;
+            let p = TcpStreamPoolBuilder::new(addr)
                 .build(Clone::clone(&closer))
                 .await?;
             v.push(Arc::new(Pool::Tcp(p)));

@@ -1,42 +1,82 @@
 use async_trait::async_trait;
-use rustls::pki_types::ServerName;
+use capybara_util::cachestr::Cachestr;
+use once_cell::sync::Lazy;
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
-use capybara_util::cachestr::Cachestr;
-
 use crate::{CapybaraError, Result};
 
-#[derive(Clone, Hash, Eq, PartialEq)]
-pub enum UpstreamKey {
-    Tcp(Addr),
-    Tls(Addr),
-    Tag(Cachestr),
-}
+pub const PORT_HTTP: u16 = 80;
+pub const PORT_TLS: u16 = 443;
 
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum Addr {
     SocketAddr(SocketAddr),
-    Host(Cachestr, u16),
+    Host(/* host */ Cachestr, /* port */ u16),
 }
 
 impl Addr {
-    fn parse_from(s: &str, default_port: Option<u16>) -> Result<Self> {
-        let (host, port) = host_and_port(s)?;
+    #[inline]
+    fn parse_host_port(s: &str) -> Option<(&str, Option<u16>)> {
+        let mut res = None;
+        let mut sp = s.splitn(2, ':');
+        if let Some(first) = sp.next() {
+            let mut port = None;
 
-        let port = match port {
-            None => {
-                default_port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?
+            if let Some(second) = sp.next() {
+                match second.parse::<u16>() {
+                    Ok(n) => {
+                        port = Some(n);
+                    }
+                    Err(_) => return None,
+                }
             }
-            Some(port) => port,
-        };
 
-        if let Ok(addr) = host.parse::<IpAddr>() {
-            return Ok(Addr::SocketAddr(SocketAddr::new(addr, port)));
+            res = Some((first, port));
         }
 
-        Ok(Addr::Host(Cachestr::from(host), port))
+        res
+    }
+
+    #[inline]
+    fn parse_with_port(s: &str, default_port: u16) -> Option<Self> {
+        match Self::parse_host_port(s) {
+            None => None,
+            Some((host, port)) => {
+                let port = port.unwrap_or(default_port);
+                if port < 1 {
+                    return None;
+                }
+
+                // return if target is a valid ip
+                if let Ok(addr) = host.parse::<IpAddr>() {
+                    return Some(Addr::SocketAddr(SocketAddr::new(addr, port)));
+                }
+
+                // return if the target is a valid domain
+                if is_valid_domain(host) {
+                    return Some(Addr::Host(Cachestr::from(host), port));
+                }
+
+                None
+            }
+        }
+    }
+}
+
+impl FromStr for Addr {
+    type Err = CapybaraError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse_with_port(s, 0)
+            .ok_or_else(|| CapybaraError::InvalidAddress(s.to_string().into()))
+    }
+}
+
+impl From<SocketAddr> for Addr {
+    fn from(value: SocketAddr) -> Self {
+        Self::SocketAddr(value)
     }
 }
 
@@ -49,20 +89,14 @@ impl Display for Addr {
     }
 }
 
-#[inline]
-fn host_and_port(s: &str) -> Result<(&str, Option<u16>)> {
-    let mut sp = s.splitn(2, ':');
-
-    match sp.next() {
-        None => Err(CapybaraError::InvalidUpstream(s.to_string().into())),
-        Some(first) => match sp.next() {
-            Some(second) => match second.parse::<u16>() {
-                Ok(port) => Ok((first, Some(port))),
-                Err(_) => Err(CapybaraError::InvalidUpstream(s.to_string().into())),
-            },
-            None => Ok((first, None)),
-        },
-    }
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum UpstreamKey {
+    /// TCP address
+    Tcp(Addr),
+    /// TLS address
+    Tls(Addr),
+    /// a tag which links to an upstream
+    Tag(Cachestr),
 }
 
 impl FromStr for UpstreamKey {
@@ -74,53 +108,48 @@ impl FromStr for UpstreamKey {
         // 3. with schema: tcp://1.2.3.4:8080, tls://example.com:8443, http://1.2.3.4, https://example.com
         // TODO: 4. identify: my_upstream
 
-        fn is_tls_port(port: u16) -> bool {
-            port == 443
-        }
-
-        fn to_sni(sni: &str) -> Result<ServerName<'static>> {
-            ServerName::try_from(sni)
-                .map_err(|_| CapybaraError::InvalidTlsSni(sni.to_string().into()))
-                .map(|it| it.to_owned())
-        }
-
         // FIXME: too many duplicated codes
         if let Some(suffix) = s.strip_prefix("upstream://") {
-            return if suffix.is_empty() {
-                Err(CapybaraError::InvalidUpstream(s.to_string().into()))
-            } else {
+            return if is_valid_identify(suffix) {
                 Ok(UpstreamKey::Tag(Cachestr::from(suffix)))
+            } else {
+                Err(CapybaraError::InvalidUpstream(s.to_string().into()))
             };
         }
 
         if let Some(suffix) = s.strip_prefix("tcp://") {
-            let addr = Addr::parse_from(suffix, None)?;
+            let addr = Addr::parse_with_port(suffix, 0)
+                .ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
             return Ok(UpstreamKey::Tcp(addr));
         }
 
         if let Some(suffix) = s.strip_prefix("tls://") {
-            let addr = Addr::parse_from(suffix, Some(443))?;
+            let addr = Addr::parse_with_port(suffix, PORT_TLS)
+                .ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
             return Ok(UpstreamKey::Tls(addr));
         }
 
         if let Some(suffix) = s.strip_prefix("http://") {
-            let addr = Addr::parse_from(suffix, Some(80))?;
+            let addr = Addr::parse_with_port(suffix, PORT_HTTP)
+                .ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
             return Ok(UpstreamKey::Tcp(addr));
         }
 
         if let Some(suffix) = s.strip_prefix("https://") {
-            let addr = Addr::parse_from(suffix, Some(443))?;
+            let addr = Addr::parse_with_port(suffix, PORT_TLS)
+                .ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
             return Ok(UpstreamKey::Tls(addr));
         }
 
-        let (host, port) = host_and_port(s)?;
-        let port = port.ok_or_else(|| CapybaraError::InvalidUpstream(s.to_string().into()))?;
-        let addr = match host.parse::<IpAddr>() {
-            Ok(ip) => Addr::SocketAddr(SocketAddr::new(ip, port)),
-            Err(_) => Addr::Host(Cachestr::from(host), port),
-        };
+        if let Some(addr) = Addr::parse_with_port(s, 0) {
+            return Ok(UpstreamKey::Tcp(addr));
+        }
 
-        Ok(UpstreamKey::Tcp(addr))
+        if is_valid_identify(s) {
+            return Ok(UpstreamKey::Tag(Cachestr::from(s)));
+        }
+
+        Err(CapybaraError::InvalidUpstream(s.to_string().into()))
     }
 }
 
@@ -132,6 +161,20 @@ impl Display for UpstreamKey {
             UpstreamKey::Tag(tag) => write!(f, "upstream://{}", tag),
         }
     }
+}
+
+fn is_valid_domain(s: &str) -> bool {
+    static DOMAIN_REGEXP: Lazy<regex::Regex> =
+        Lazy::new(|| regex::Regex::new("^[a-zA-Z0-9-]*(\\.[a-zA-Z0-9-]*)*$").unwrap());
+
+    DOMAIN_REGEXP.is_match(s)
+}
+
+fn is_valid_identify(s: &str) -> bool {
+    static IDENTIFY_REGEXP: Lazy<regex::Regex> =
+        Lazy::new(|| regex::Regex::new("^[a-zA-Z][a-zA-Z0-9_-]*$").unwrap());
+
+    IDENTIFY_REGEXP.is_match(s)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +209,8 @@ mod tests {
         init();
 
         for (s, expect) in [
+            // tag
+            ("some-upstream", "upstream://some-upstream"),
             ("upstream://some-upstream", "upstream://some-upstream"),
             // ip+port
             ("127.0.0.1:8080", "tcp://127.0.0.1:8080"),
@@ -180,6 +225,7 @@ mod tests {
             ("http://127.0.0.1:8080", "tcp://127.0.0.1:8080"),
             ("https://127.0.0.1:8443", "tls://127.0.0.1:8443"),
             // schema+host
+            ("http://localhost", "tcp://localhost:80"),
             ("http://example.com", "tcp://example.com:80"),
             ("https://example.com", "tls://example.com:443"),
             // schema+host+port

@@ -50,14 +50,8 @@ enum Commands {
     },
 }
 
-fn init() {
-    pretty_env_logger::try_init_timed().ok();
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init();
-
     let cli = Cli::parse();
 
     let shutdown = Arc::new(Notify::new());

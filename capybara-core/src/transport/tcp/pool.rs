@@ -31,22 +31,7 @@ impl TcpStreamPoolBuilder {
     pub(crate) const BUFF_SIZE: usize = 8192;
     pub(crate) const MAX_SIZE: usize = 128;
 
-    pub fn with_addr(addr: SocketAddr) -> Self {
-        let addr = Address::Direct(addr);
-        Self::new(addr)
-    }
-
-    pub fn with_domain<D>(domain: D, port: u16) -> Self
-    where
-        D: AsRef<str>,
-    {
-        let domain = Cachestr::from(domain.as_ref());
-        let addr = Address::Domain(domain, port);
-        Self::new(addr)
-    }
-
-    #[inline(always)]
-    fn new(addr: Address) -> Self {
+    pub fn new(addr: Address) -> Self {
         Self {
             addr,
             timeout: None,
@@ -183,8 +168,8 @@ impl Manager {
     #[inline]
     async fn connect(&self) -> Result<TcpStream> {
         let addr = match &self.addr {
-            Address::Direct(addr) => *addr,
-            Address::Domain(domain, port) => {
+            Address::SocketAddr(addr) => *addr,
+            Address::Host(domain, port) => {
                 let ip = self.resolver.resolve_one(domain).await?;
                 SocketAddr::new(ip, *port)
             }
@@ -246,7 +231,7 @@ mod tests {
 
         let closer = Arc::new(Notify::new());
 
-        let pool = TcpStreamPoolBuilder::with_addr("1.1.1.1:80".parse()?)
+        let pool = TcpStreamPoolBuilder::new("1.1.1.1:80".parse()?)
             .max_size(1)
             .build(Clone::clone(&closer))
             .await?;

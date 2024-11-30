@@ -3,12 +3,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use coarsetime::Instant;
+use once_cell::sync::Lazy;
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::TlsConnector;
 
 use crate::CapybaraError;
+
+pub static DEFAULT_CONNECTOR: Lazy<TlsConnector> =
+    Lazy::new(|| TlsConnectorBuilder::default().build().unwrap());
 
 enum Source<'a> {
     Content(&'a str),

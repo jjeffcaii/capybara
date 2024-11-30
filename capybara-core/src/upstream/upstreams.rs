@@ -3,7 +3,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
-use rustls::pki_types::ServerName;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 
@@ -105,49 +104,32 @@ impl Upstreams {
         let closer = Clone::clone(&self.closer);
 
         let pool = match k {
-            UpstreamKey::Tcp(addr) => match addr {
-                Addr::SocketAddr(addr) => {
-                    let p = tcp::TcpStreamPoolBuilder::with_addr(*addr)
-                        .build(closer)
-                        .await?;
-                    Pool::Tcp(p)
-                }
-                Addr::Host(host, port) => {
+            UpstreamKey::Tcp(addr) => {
+                let mut bu = tcp::TcpStreamPoolBuilder::new(Clone::clone(addr));
+                if matches!(addr, &Addr::Host(_, _)) {
                     let resolver = match &self.resolver {
                         None => Clone::clone(&*DEFAULT_RESOLVER),
                         Some(resolver) => Clone::clone(resolver),
                     };
+                    bu = bu.resolver(resolver);
+                }
+                Pool::Tcp(bu.build(closer).await?)
+            }
+            UpstreamKey::Tls(addr) => {
+                let mut bu = tls::TlsStreamPoolBuilder::new(Clone::clone(addr));
 
-                    let p = tcp::TcpStreamPoolBuilder::with_domain(host.as_ref(), *port)
-                        .resolver(resolver)
-                        .build(closer)
-                        .await?;
-                    Pool::Tcp(p)
-                }
-            },
-            UpstreamKey::Tls(addr) => match addr {
-                Addr::SocketAddr(addr) => {
-                    let sni = ServerName::from(addr.ip());
-                    let p = tls::TlsStreamPoolBuilder::with_addr(*addr)
-                        .sni(sni)
-                        .build(closer)
-                        .await?;
-                    Pool::Tls(p)
-                }
-                Addr::Host(host, port) => {
+                if matches!(addr, &Addr::Host(_, _)) {
                     let resolver = match &self.resolver {
                         None => Clone::clone(&*DEFAULT_RESOLVER),
                         Some(resolver) => Clone::clone(resolver),
                     };
-                    let p = tls::TlsStreamPoolBuilder::with_domain(host.as_ref(), *port)
-                        .resolver(resolver)
-                        .build(closer)
-                        .await?;
-                    Pool::Tls(p)
+                    bu = bu.resolver(resolver);
                 }
-            },
-            UpstreamKey::Tag(tag) => {
-                bail!("no upstream tag '{}' found", tag.as_ref());
+
+                Pool::Tls(bu.build(closer).await?)
+            }
+            UpstreamKey::Tag(_) => {
+                bail!("you should never build from a tagged upstream!");
             }
         };
 

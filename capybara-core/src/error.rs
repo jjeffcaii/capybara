@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::io;
-use tokio::time::error::Elapsed;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CapybaraError {
@@ -31,6 +30,9 @@ pub enum CapybaraError {
 
     #[error("invalid route")]
     InvalidRoute,
+
+    #[error("invalid address '{0}'")]
+    InvalidAddress(/* address */ Cow<'static, str>),
 
     #[error("invalid upstream pool")]
     InvalidUpstreamPool,

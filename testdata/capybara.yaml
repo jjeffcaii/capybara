@@ -1,6 +1,7 @@
-loggers:
-  main:
-    path: ~/capybara/logs/main.log
+#loggers:
+#  main:
+#    stdout: true
+#    line_num: true
 
 providers:
   - kind: static_file

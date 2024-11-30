@@ -711,16 +711,21 @@ where
                                 Pool::Tcp(pool) => {
                                     if !self.ctx.request().headers()._exist(HttpField::Host.into())
                                     {
-                                        if let Address::Domain(dom, port) = pool.manager().address()
+                                        if let Address::Host(host, port) = pool.manager().address()
                                         {
                                             let host = if *port == 80 {
-                                                AnyString::Cache(Clone::clone(dom))
+                                                AnyString::Cache(Clone::clone(host))
                                             } else {
                                                 let host = {
                                                     use std::io::Write;
                                                     let mut b = SmallVec::<[u8; 128]>::new();
-                                                    write!(&mut b[..], "{}:{}", dom.as_ref(), port)
-                                                        .ok();
+                                                    write!(
+                                                        &mut b[..],
+                                                        "{}:{}",
+                                                        host.as_ref(),
+                                                        port
+                                                    )
+                                                    .ok();
                                                     Cachestr::from(unsafe {
                                                         std::str::from_utf8_unchecked(&b[..])
                                                     })
@@ -742,16 +747,21 @@ where
                                 Pool::Tls(pool) => {
                                     if !self.ctx.request().headers()._exist(HttpField::Host.into())
                                     {
-                                        if let Address::Domain(dom, port) = pool.manager().address()
+                                        if let Address::Host(host, port) = pool.manager().address()
                                         {
                                             let host = if *port == 443 {
-                                                AnyString::Cache(Clone::clone(dom))
+                                                AnyString::Cache(Clone::clone(host))
                                             } else {
                                                 let host = {
                                                     let mut b = SmallVec::<[u8; 128]>::new();
                                                     use std::io::Write;
-                                                    write!(&mut b[..], "{}:{}", dom.as_ref(), port)
-                                                        .ok();
+                                                    write!(
+                                                        &mut b[..],
+                                                        "{}:{}",
+                                                        host.as_ref(),
+                                                        port
+                                                    )
+                                                    .ok();
                                                     Cachestr::from(unsafe {
                                                         std::str::from_utf8_unchecked(&b[..])
                                                     })
